@@ -74,7 +74,7 @@ function start(isHost, code) {
   room = code; host = isHost;
   $('create-room').disabled = $('join-room').disabled = true; status('Abriendo sala…', 'waiting');
   // Public broker only exchanges session metadata; payload uses encrypted WebRTC.
-  const instance = new window.Peer(isHost ? `reynoso-drop-${room}` : undefined, { debug: 0, config: { iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }] } });
+  const instance = new window.Peer(isHost ? `reynoso-drop-${room}` : undefined, { debug: 1 });
   peer = instance;
   signalTimer = setTimeout(() => { if (peer === instance) { reset(); error('No se pudo abrir la sala. La red o el servicio de conexión pueden no estar disponibles.'); } }, 25000);
   instance.on('open', () => {
