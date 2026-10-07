@@ -1,4 +1,5 @@
-import { MAX_TEXT, MAX_FILE, MAX_MEMORY, CHUNK_SIZE, newCode, newRoomCode, formatCode, parseCode, deviceName, trustedReconnect, validId, safeName, sizeLabel, validOffer, digest, FileReceiver } from './protocol.js?v=1.1';
+import { MAX_TEXT, MAX_FILE, MAX_MEMORY, CHUNK_SIZE, newCode, newRoomCode, formatCode, parseCode, deviceName, trustedReconnect, validId, safeName, sizeLabel, validOffer, digest, FileReceiver } from './protocol.js?v=1.2';
+import { fileKind, extendQueue, imageMime } from './files.js?v=1.2';
 const $ = id => document.getElementById(id);
 let peer = null, connection = null, incoming = null, ready = false, room = '', host = false;
 let connectTimer, signalTimer, toastTimer, outgoingId = null, busy = false, usedMemory = 0;
@@ -6,6 +7,8 @@ let autoJoinTimer, roomExpiryTimer, reconnectTimer, remoteName = '', remoteKind 
 const clientToken = newCode(); // Page-lifetime identity, never stored on disk.
 const ROOM_TTL = 10 * 60 * 1000;
 const pending = new Map(), receivers = new Map(), urls = new Set();
+let queuedFiles = [], queueGeneration = 0;
+const queueUrls = new Set(), cardUrls = new Map();
 const device = /iPad/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) ? 'iPad' : /iPhone/.test(navigator.userAgent) ? 'iPhone' : /Android/.test(navigator.userAgent) ? 'Android' : /Windows/.test(navigator.userAgent) ? 'Laptop Windows' : 'Otro dispositivo';
 $('device-name').value = device;
 function renderDevices() {
@@ -29,7 +32,57 @@ function networkInfo() {
 function toast(message) { $('toast').textContent = message; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').hidden = true; }, 4500); }
 function error(message) { $('session-error').textContent = message; $('session-error').hidden = false; }
 function status(message, kind = '') { $('status').textContent = message; $('status').className = `badge ${kind}`; }
-function controls() { $('send-text').disabled = !ready || !$('text-input').value.trim() || busy; $('file-zone').disabled = !ready || busy; $('file-input').disabled = !ready || busy; }
+function controls() {
+  $('send-text').disabled = !ready || !$('text-input').value.trim() || busy;
+  $('file-zone').disabled = $('choose-photos').disabled = $('file-input').disabled = $('photo-input').disabled = busy;
+  $('send-files').disabled = !ready || busy || !queuedFiles.length || receivers.size > 0;
+  $('clear-files').disabled = busy || !queuedFiles.length;
+  $('queue-hint').textContent = !queuedFiles.length ? 'Puedes seleccionar archivos antes de conectar.' : !ready ? 'Conecta la otra pantalla para enviar esta selección.' : receivers.size ? 'Termina la recepción actual para enviar.' : 'Listo para enviar a tu otra pantalla.';
+}
+function releaseCardPreview(card) {
+  const url = cardUrls.get(card); if (!url) return;
+  URL.revokeObjectURL(url); urls.delete(url); cardUrls.delete(card);
+}
+function renderQueue() {
+  const generation = ++queueGeneration;
+  for (const url of queueUrls) URL.revokeObjectURL(url); queueUrls.clear();
+  $('file-queue').replaceChildren();
+  $('file-selection').hidden = queuedFiles.length === 0;
+  $('queue-summary').textContent = `${queuedFiles.length} ${queuedFiles.length === 1 ? 'archivo' : 'archivos'} · ${sizeLabel(queuedFiles.reduce((sum,file) => sum + file.size, 0))}`;
+  for (const [index,file] of queuedFiles.entries()) {
+    const item = document.createElement('div'); item.className = 'queued-file';
+    const badge = document.createElement('span'); badge.className = 'file-badge'; badge.textContent = fileKind(file.name) === 'Foto' ? 'FOTO' : file.name.includes('.') ? file.name.split('.').pop().slice(0,5).toUpperCase() : 'FILE';
+    const details = document.createElement('div'); details.className = 'queued-details';
+    const name = document.createElement('strong'); name.textContent = safeName(file.name);
+    const info = document.createElement('span'); info.textContent = `${fileKind(file.name)} · ${sizeLabel(file.size)}`; details.append(name,info);
+    item.append(badge,details);
+    const remove = addButton(item, 'Quitar', () => { queuedFiles.splice(index,1); renderQueue(); controls(); }, 'subtle'); remove.disabled = busy;
+    $('file-queue').append(item);
+    imageMime(file).then(mime => {
+      if (!mime || generation !== queueGeneration) return;
+      const url = URL.createObjectURL(file.slice(0,file.size,mime)); queueUrls.add(url);
+      const image = document.createElement('img'); image.className = 'queued-thumbnail'; image.alt = `Vista previa: ${safeName(file.name)}`; image.decoding = 'async';
+      image.onload = () => { if (generation === queueGeneration) badge.replaceWith(image); };
+      image.onerror = () => { URL.revokeObjectURL(url); queueUrls.delete(url); };
+      image.src = url;
+    }).catch(() => { /* Keep the original file and generic badge if decoding fails. */ });
+  }
+}
+function stageFiles(files) {
+  if (busy) { toast('Espera a que termine el envío actual.'); return; }
+  const result = extendQueue(queuedFiles, Array.from(files)); queuedFiles = result.files;
+  renderQueue(); controls();
+  $('file-input').value = $('photo-input').value = '';
+  if (result.rejected.length) toast(`${result.rejected.length} ${result.rejected.length === 1 ? 'archivo omitido' : 'archivos omitidos'}: ${result.rejected[0].reason}.`);
+}
+async function receivedPhoto(blob, card, name) {
+  const mime = await imageMime(blob); if (!mime || !card.isConnected) return;
+  const url = URL.createObjectURL(blob.slice(0,blob.size,mime)); urls.add(url); cardUrls.set(card,url);
+  const image = document.createElement('img'); image.className = 'received-photo'; image.alt = safeName(name); image.decoding = 'async';
+  image.onload = () => { if (card.isConnected && cardUrls.get(card) === url) card.append(image); };
+  image.onerror = () => { releaseCardPreview(card); if (card.isConnected) { const note = document.createElement('p'); note.className = 'preview-note'; note.textContent = 'Vista previa no disponible en este navegador. Puedes descargar la foto original.'; card.append(note); } };
+  image.src = url;
+}
 function ack(key, value = true, fail = null) { const task = pending.get(key); if (!task) return; clearTimeout(task.timer); pending.delete(key); fail ? task.reject(new Error(fail)) : task.resolve(value); }
 function send(msg) { if (!connection?.open) throw new Error('El otro dispositivo se desconectó'); connection.send(msg); }
 function request(msg, key, timeout = 30000) {
@@ -43,7 +96,7 @@ function dropReceiver(id, message) {
   const entry = receivers.get(id); if (!entry) return;
   clearTimeout(entry.timer);
   usedMemory -= entry.offer.size; receivers.delete(id); entry.card.remove();
-  if (message) toast(message); updateInbox();
+  if (message) toast(message); updateInbox(); controls();
 }
 function reset() {
   ready = false; room = ''; host = false;
@@ -186,9 +239,10 @@ function textCard(text, sent = false) {
 function fileCard(offer) {
   const card = makeCard('ARCHIVO · SOLICITUD');
   const name = document.createElement('strong'); name.className = 'item-name'; name.textContent = safeName(offer.name);
-  const state = document.createElement('div'); state.className = 'item-size'; state.textContent = `${sizeLabel(offer.size)} · Esperando tu permiso`;
+  const state = document.createElement('div'); state.className = 'item-size'; state.textContent = `${fileKind(offer.name)} · ${sizeLabel(offer.size)} · Esperando tu permiso`;
   const actions = document.createElement('div'); actions.className = 'item-actions'; card.append(name, state, actions);
   const entry = { offer, card, state, actions, receiver: null, timer: null }; receivers.set(offer.id, entry); usedMemory += offer.size;
+  controls();
   entry.timer = setTimeout(() => { try { send({ type: 'failed', id: offer.id, reason: 'La solicitud de archivo expiró' }); } catch { /* disconnected */ } dropReceiver(offer.id); }, 90000);
   addButton(actions, 'Recibir archivo', () => {
     clearTimeout(entry.timer); entry.receiver = new FileReceiver(offer); actions.replaceChildren(); state.textContent = 'Recibiendo… 0%';
@@ -225,10 +279,11 @@ async function handle(msg) {
     const blob = await entry.receiver.finish();
     if (receivers.get(msg.id) !== entry || !ready) return;
     clearTimeout(entry.timer); receivers.delete(msg.id); entry.actions.replaceChildren();
-    entry.card.querySelector('.item-meta span').textContent = 'ARCHIVO · RECIBIDO'; entry.state.textContent = `${sizeLabel(blob.size)} · Integridad verificada`;
+    entry.card.querySelector('.item-meta span').textContent = 'ARCHIVO · RECIBIDO'; entry.state.textContent = `${fileKind(entry.offer.name)} · ${sizeLabel(blob.size)} · Integridad verificada`;
     addButton(entry.actions, 'Descargar', () => download(blob, entry.offer.name), 'primary');
-    addButton(entry.actions, 'Quitar', () => { usedMemory -= entry.offer.size; entry.card.remove(); updateInbox(); }, 'subtle');
-    send({type:'ack',key:`end:${msg.id}`}); toast('Archivo recibido y verificado');
+    addButton(entry.actions, 'Quitar', () => { usedMemory -= entry.offer.size; releaseCardPreview(entry.card); entry.card.remove(); updateInbox(); }, 'subtle');
+    send({type:'ack',key:`end:${msg.id}`}); controls(); toast('Archivo recibido y verificado');
+    receivedPhoto(blob,entry.card,entry.offer.name).catch(() => { /* Download remains available independently of preview support. */ });
   }
 }
 async function sendText() {
@@ -244,7 +299,7 @@ async function sendText() {
 async function sendFiles(files) {
   if (!ready || busy || receivers.size) { toast('Conecta la otra pantalla y termina el envío actual.'); return; }
   const list = Array.from(files); if (!list.length) return;
-  busy = true; controls();
+  busy = true; renderQueue(); controls();
   try {
     for (const file of list) {
       if (!ready) break;
@@ -264,12 +319,14 @@ async function sendFiles(files) {
       }
       $('progress-label').textContent = 'Verificando integridad en la otra pantalla…';
       await request({type:'file-end',id}, `end:${id}`, 60000);
+      const queueIndex = queuedFiles.indexOf(file); if (queueIndex !== -1) queuedFiles.splice(queueIndex,1);
+      renderQueue(); controls();
       toast(`${safeName(file.name)} entregado`);
     }
   } catch (e) {
     if (outgoingId && ready) { try { send({type:'failed',id:outgoingId,reason:'El envío se canceló'}); } catch { /* disconnected */ } }
     error(e.message);
-  } finally { outgoingId = null; busy = false; $('transfer-progress').hidden = true; $('file-input').value = ''; controls(); }
+  } finally { outgoingId = null; busy = false; $('transfer-progress').hidden = true; $('file-input').value = ''; renderQueue(); controls(); }
 }
 function countText() { $('text-counter').textContent = `${$('text-input').value.length.toLocaleString('es-MX')} caracteres`; controls(); }
 function joinRoom() { const code = parseCode($('room-input').value); if (!code) { error('Escribe los 6 números de la sala. También puedes pegar su enlace.'); return; } start(false, code); }
@@ -293,18 +350,23 @@ $('text-input').addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) 
 $('send-text').addEventListener('click', sendText);
 $('paste-text').addEventListener('click', async () => { try { $('text-input').value = (await navigator.clipboard.readText()).slice(0, MAX_TEXT); countText(); $('text-input').focus(); } catch { $('text-input').focus(); toast('Pega con Ctrl+V o mantén presionado el campo en iPad.'); } });
 $('file-zone').addEventListener('click', () => $('file-input').click());
-$('file-input').addEventListener('change', e => sendFiles(e.target.files));
-for (const event of ['dragenter', 'dragover']) $('file-zone').addEventListener(event, e => { e.preventDefault(); if (ready && !busy) $('file-zone').classList.add('drag-over'); });
-for (const event of ['dragleave', 'drop']) $('file-zone').addEventListener(event, e => { e.preventDefault(); $('file-zone').classList.remove('drag-over'); if (event === 'drop') sendFiles(e.dataTransfer.files); });
+$('choose-photos').addEventListener('click', () => $('photo-input').click());
+$('file-input').addEventListener('change', e => stageFiles(e.target.files));
+$('photo-input').addEventListener('change', e => stageFiles(e.target.files));
+$('send-files').addEventListener('click', () => sendFiles([...queuedFiles]));
+$('clear-files').addEventListener('click', () => { queuedFiles = []; renderQueue(); controls(); });
+for (const event of ['dragenter', 'dragover']) $('file-zone').addEventListener(event, e => { e.preventDefault(); if (!busy) $('file-zone').classList.add('drag-over'); });
+for (const event of ['dragleave', 'drop']) $('file-zone').addEventListener(event, e => { e.preventDefault(); $('file-zone').classList.remove('drag-over'); if (event === 'drop') stageFiles(e.dataTransfer.files); });
+window.addEventListener('paste', e => { if (e.clipboardData?.files.length) { e.preventDefault(); stageFiles(e.clipboardData.files); } });
 window.addEventListener('dragover', e => e.preventDefault()); window.addEventListener('drop', e => e.preventDefault());
 $('cancel-transfer').addEventListener('click', () => { const id = outgoingId; if (!id) return; outgoingId = null; try { send({type:'failed',id,reason:'El remitente canceló el envío'}); } catch { /* disconnected */ } for (const key of [...pending.keys()]) if (key.includes(id)) ack(key, null, 'Envío cancelado'); });
 $('clear-inbox').addEventListener('click', () => {
   if (receivers.size) { toast('Termina o rechaza el archivo pendiente antes de vaciar.'); return; }
   if (!confirm('¿Vaciar la bandeja? Descarga primero lo que quieras conservar.')) return;
-  $('inbox-items').replaceChildren(); usedMemory = 0; for (const url of urls) URL.revokeObjectURL(url); urls.clear(); updateInbox();
+  $('inbox-items').replaceChildren(); usedMemory = 0; for (const url of urls) URL.revokeObjectURL(url); urls.clear(); cardUrls.clear(); updateInbox();
 });
 window.addEventListener('pagehide', reset);
 const initial = parseCode(location.hash.slice(1)); if (initial) { $('room-input').value = formatCode(initial); history.replaceState(null, '', location.pathname + location.search); scheduleJoin(); }
 window.addEventListener('online', networkInfo); window.addEventListener('offline', networkInfo);
 navigator.connection?.addEventListener('change', networkInfo);
-controls(); renderDevices(); networkInfo();
+controls(); renderDevices(); networkInfo(); renderQueue();
