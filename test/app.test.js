@@ -177,13 +177,15 @@ function linkedSessions({autoReceive=true}={}) {
   sender.expire(300);const guest=sender.peers[0];guest.emit('open');
   const local=new receiver.Connection({device:'Laptop',kind:'Laptop Windows',deviceType:'computer'}),remote=guest.connection;
   const downloaded=[];
-  local.send=async msg=>{if(msg.type==='ack'&&msg.key.startsWith('end:'))downloaded.push(receiver.element('inbox-items').children[0]);remote.emit('data',await peerRoundTrip(msg));};
-  remote.send=async msg=>local.emit('data',await peerRoundTrip(msg));
+  let resolveConnected,resolveOffered;
+  const connected=new Promise(resolve=>{resolveConnected=resolve;}),offered=new Promise(resolve=>{resolveOffered=resolve;});
+  local.send=async msg=>{if(msg.type==='ack'&&msg.key.startsWith('end:'))downloaded.push(receiver.element('inbox-items').children[0]);remote.emit('data',await peerRoundTrip(msg));if(msg.type==='approved')resolveConnected();};
+  remote.send=async msg=>{local.emit('data',await peerRoundTrip(msg));if(msg.type==='file-offer')resolveOffered();};
   host.emit('connection',local);remote.establish();local.establish();
-  return {sender,receiver,local,remote,downloaded};
+  return {sender,receiver,local,remote,downloaded,connected,offered};
 }
 test('captura y Excel pasan por el codec real de PeerJS y llegan automáticamente con SHA verificado', async () => {
-  const {sender,receiver}=linkedSessions();await new Promise(resolve=>setImmediate(resolve));
+  const {sender,receiver,connected}=linkedSessions();await connected;
   const photoBytes=new Uint8Array(protocol.CHUNK_SIZE*2+23);for(let i=0;i<photoBytes.length;i++)photoBytes[i]=i%251;photoBytes.set([137,80,78,71,13,10,26,10]);
   const files=[new File([photoBytes],'captura.png'),new File([new Uint8Array([80,75,3,4,0,255])],'reporte.xlsx')];
   sender.element('file-input').files=files;sender.element('file-input').fire('change');
@@ -197,9 +199,9 @@ test('captura y Excel pasan por el codec real de PeerJS y llegan automáticament
   assert.equal(receiver.element('session-error').textContent,'');
 });
 test('modo manual conserva aceptar/rechazar y activar automático libera la espera', async () => {
-  const {sender,receiver}=linkedSessions({autoReceive:false});await new Promise(resolve=>setImmediate(resolve));
+  const {sender,receiver,connected,offered}=linkedSessions({autoReceive:false});await connected;
   sender.element('file-input').files=[new File(['contenido completo'],'manual.txt')];sender.element('file-input').fire('change');
-  const sending=sender.element('send-files').fire('click');await new Promise(resolve=>setImmediate(resolve));
+  const sending=sender.element('send-files').fire('click');await offered;
   const card=receiver.element('inbox-items').children[0];assert.equal(card.children[3].children[0].textContent,'Recibir archivo');
   assert.equal(sender.element('file-selection').hidden,false);
   receiver.element('auto-receive').checked=true;receiver.element('auto-receive').fire('change');await sending;
