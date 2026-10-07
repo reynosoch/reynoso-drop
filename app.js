@@ -77,12 +77,13 @@ function stageFiles(files) {
   $('file-input').value = $('photo-input').value = '';
   if (result.rejected.length) toast(`${result.rejected.length} ${result.rejected.length === 1 ? 'archivo omitido' : 'archivos omitidos'}: ${result.rejected[0].reason}.`);
 }
+function linesLabel(text) { const count = lineCount(text); return `${count.toLocaleString('es-MX')} ${count === 1 ? 'línea' : 'líneas'}`; }
 function prepareTextFile(text) {
   let file;
   try { file = textFile(text); } catch (e) { toast(e.message); return null; }
   stageFiles([file]);
   if (!queuedFiles.includes(file)) return null;
-  toast(`${lineCount(text).toLocaleString('es-MX')} líneas preparadas como .txt. El contenido se conserva completo.`);
+  toast(`${linesLabel(text)} preparadas como .txt. El contenido se conserva completo.`);
   return file;
 }
 function pasteIntoEditor(text, atSelection = false) {
@@ -382,7 +383,7 @@ async function sendFiles(files) {
 }
 function countText() {
   const text = $('text-input').value, asFile = needsTextFile(text);
-  $('text-counter').textContent = `${text.length.toLocaleString('es-MX')} caracteres · ${lineCount(text)} líneas${asFile ? ' · Se enviará como .txt' : ''}`;
+  $('text-counter').textContent = `${text.length.toLocaleString('es-MX')} caracteres · ${linesLabel(text)}${asFile ? ' · Se enviará como .txt' : ''}`;
   $('send-text').textContent = asFile ? 'Enviar como .txt →' : 'Enviar texto →'; controls();
 }
 function joinRoom() { const code = parseCode($('room-input').value); if (!code) { error('Escribe los 4 números de la sala. También puedes pegar su enlace.'); return; } start(false, code); }
