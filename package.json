@@ -1,0 +1,10 @@
+{
+  "name": "reynoso-drop",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check app.js && node --check protocol.js && node --test test/*.test.js",
+    "build": "node scripts/build.js"
+  }
+}
