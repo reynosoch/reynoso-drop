@@ -1,7 +1,8 @@
-import { MAX_TEXT, MAX_FILE, MAX_MEMORY, CHUNK_SIZE, newCode, newRoomCode, formatCode, parseCode, deviceName, validId, safeName, sizeLabel, validOffer, digest, FileReceiver } from './protocol.js?v=1.4';
-import { fileKind, extendQueue, imageMime } from './files.js?v=1.4';
-import { lineCount, needsTextFile, textFile } from './clipboard.js?v=1.4';
-import { drawRoomQR } from './qr.js?v=1.4';
+import { MAX_TEXT, MAX_FILE, MAX_MEMORY, CHUNK_SIZE, newCode, newRoomCode, formatCode, parseCode, deviceName, validId, safeName, sizeLabel, validOffer, digest, FileReceiver } from './protocol.js?v=1.5';
+import { fileKind, extendQueue, imageMime } from './files.js?v=1.5';
+import { lineCount, needsTextFile, textFile } from './clipboard.js?v=1.5';
+import { drawRoomQR } from './qr.js?v=1.5';
+import { detectDevice, deviceType, deviceIcon } from './devices.js?v=1.5';
 const $ = id => document.getElementById(id);
 let peer = null, connection = null, incoming = null, ready = false, room = '', host = false;
 let connectTimer, signalTimer, toastTimer, outgoingId = null, busy = false, usedMemory = 0;
@@ -10,21 +11,28 @@ const ROOM_TTL = 10 * 60 * 1000;
 const pending = new Map(), receivers = new Map(), urls = new Set();
 let queuedFiles = [], queueGeneration = 0;
 const queueUrls = new Set(), cardUrls = new Map();
-const device = /iPad/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) ? 'iPad' : /iPhone/.test(navigator.userAgent) ? 'iPhone' : /Android/.test(navigator.userAgent) ? 'Android' : /Windows/.test(navigator.userAgent) ? 'Laptop Windows' : 'Otro dispositivo';
+const localDevice = detectDevice(navigator), device = localDevice.label;
+let remoteType = '';
 $('device-name').value = device;
 function renderDevices() {
   $('local-device-name').textContent = roomName || deviceName($('device-name').value, device);
   $('local-device-detail').textContent = `${device} · Este dispositivo`;
+  $('local-device-icon').innerHTML = deviceIcon(localDevice.type);
   $('local-device-status').textContent = ready ? 'Listo para enviar' : room ? 'En la sala' : 'Disponible';
   $('local-device-status').className = `device-state${ready ? ' live' : ''}`;
-  const pendingDevice = Boolean(incoming);
-  $('remote-device-name').textContent = remoteName || 'Tu otra pantalla';
-  $('remote-device-detail').textContent = remoteKind || (room ? 'Abre Drop en el otro dispositivo' : 'Laptop, iPad o teléfono');
-  $('remote-device-status').textContent = ready ? 'Conectado' : pendingDevice ? 'Conectando…' : !host && room ? 'Conectando…' : 'Sin conectar';
-  $('remote-device-status').className = `device-state${ready ? ' live' : ''}`;
-  $('device-count').textContent = ready ? '2 / 2 conectados' : pendingDevice ? '1 + conectando' : room ? '1 / 2 en sala' : 'Sin sala';
+  const hasRemote = Boolean(room && (ready || incoming));
+  $('remote-device').hidden = !hasRemote;
+  if (hasRemote) {
+    $('remote-device-name').textContent = remoteName || 'Dispositivo';
+    $('remote-device-detail').textContent = remoteKind || 'Conectando a la sala';
+    $('remote-device-icon').innerHTML = deviceIcon(deviceType(remoteType, remoteKind));
+    $('remote-device-status').textContent = ready ? 'Conectado' : 'Conectando…';
+    $('remote-device-status').className = `device-state${ready ? ' live' : ''}`;
+  }
+  $('device-count').textContent = ready ? '2 dispositivos' : hasRemote ? '2 · conectando' : '1 dispositivo';
   $('device-name').disabled = Boolean(room);
 }
+
 function networkInfo() {
   const type = navigator.connection?.type;
   const label = {wifi:'Wi-Fi', ethernet:'Ethernet', cellular:'Datos móviles'}[type];
@@ -144,7 +152,7 @@ function dropReceiver(id, message) {
 }
 function reset() {
   ready = false; room = ''; host = false;
-  remoteName = remoteKind = roomName = '';
+  remoteName = remoteKind = remoteType = roomName = '';
   clearTimeout(autoJoinTimer); clearTimeout(roomExpiryTimer); clearTimeout(reconnectTimer);
   clearTimeout(connectTimer); clearTimeout(signalTimer);
   for (const key of [...pending.keys()]) ack(key, null, 'La sala se cerró');
@@ -161,7 +169,7 @@ function disconnected(conn) {
   if (conn !== connection && conn !== incoming) return;
   if (host) {
     clearTimeout(connectTimer);
-    if (conn === incoming) { incoming = null; remoteName = remoteKind = ''; status('Esperando dispositivo', 'waiting'); renderDevices(); return; }
+    if (conn === incoming) { incoming = null; remoteName = remoteKind = remoteType = ''; status('Esperando dispositivo', 'waiting'); renderDevices(); return; }
     connection = null; ready = false;
     for (const key of [...pending.keys()]) ack(key, null, 'El otro dispositivo se desconectó');
     for (const id of [...receivers.keys()]) dropReceiver(id);
@@ -193,7 +201,7 @@ function showRoom() {
   status(host ? 'Esperando dispositivo' : 'Conectando…', 'waiting');
   renderDevices();
 }
-function roomURL() { const url = new URL(location.href); url.searchParams.set('v', '1.4'); url.hash = room; return url; }
+function roomURL() { const url = new URL(location.href); url.searchParams.set('v', '1.5'); url.hash = room; return url; }
 function watchConnection(conn) {
   const rtc = conn.peerConnection; if (!rtc?.addEventListener) return;
   const update = () => {
@@ -218,9 +226,9 @@ function wire(conn, isIncoming) {
       clearTimeout(connectTimer);
       connection = conn; incoming = null;
       remoteName = deviceName(conn.metadata?.device);
-      remoteKind = deviceName(conn.metadata?.kind, 'Otro dispositivo');
+      remoteKind = deviceName(conn.metadata?.kind, 'Otro dispositivo'); remoteType = deviceType(conn.metadata?.deviceType, remoteKind);
       // Automatic room handshake; this message never requires user approval.
-      send({type:'approved',device:roomName,kind:device}); connected();
+      send({type:'approved',device:roomName,kind:device,deviceType:localDevice.type}); connected();
     } else { status('Terminando conexión…', 'waiting'); renderDevices(); }
   });
   conn.on('data', msg => {
@@ -255,7 +263,7 @@ function start(isHost, code, collisionAttempts = 0) {
     if (host) {
       roomExpiryTimer = setTimeout(() => { if (peer === instance && !ready) { reset(); toast('El código venció. Crea una sala nueva.'); } }, ROOM_TTL);
     } else {
-      connection = instance.connect(`reynoso-drop-${room}`, { reliable: true, serialization: 'binary', metadata: { device:roomName, kind:device } });
+      connection = instance.connect(`reynoso-drop-${room}`, { reliable: true, serialization: 'binary', metadata: { device:roomName, kind:device, deviceType:localDevice.type } });
       wire(connection, false);
       connectTimer = setTimeout(() => { if (!ready && peer === instance) { reset(); error('No se abrió el canal entre las dos pantallas. No hay una autorización pendiente. Mantén ambas páginas abiertas; la red, la VPN o el servicio de conexión pueden impedir el enlace.'); } }, 30000);
     }
@@ -263,7 +271,7 @@ function start(isHost, code, collisionAttempts = 0) {
   instance.on('connection', conn => {
     if (!host || incoming || connection || peer !== instance) { conn.close(); return; }
     incoming = conn;
-    remoteName = deviceName(conn.metadata?.device); remoteKind = deviceName(conn.metadata?.kind, 'Otro dispositivo');
+    remoteName = deviceName(conn.metadata?.device); remoteKind = deviceName(conn.metadata?.kind, 'Otro dispositivo'); remoteType = deviceType(conn.metadata?.deviceType, remoteKind);
     status('Conectando dispositivo…', 'waiting'); renderDevices();
     wire(conn, true);
     connectTimer = setTimeout(() => {
@@ -307,24 +315,36 @@ function textCard(text, sent = false) {
   addButton(actions, 'Copiar', () => copy(text)); addButton(actions, 'Descargar .txt', () => download(new Blob([text], {type:'text/plain;charset=utf-8'}), 'texto.txt'));
   addButton(actions, 'Quitar', () => { usedMemory -= bytes; card.remove(); updateInbox(); }, 'subtle');
 }
+function receiverTimeout(entry, duration = 30000) {
+  clearTimeout(entry.timer);
+  entry.timer = setTimeout(() => {
+    if (receivers.get(entry.offer.id) !== entry) return;
+    try { send({type:'failed',id:entry.offer.id,reason:'La recepción expiró. Vuelve a enviar el archivo.'}); } catch { /* disconnected */ }
+    dropReceiver(entry.offer.id, 'La recepción expiró. Puedes volver a enviar el archivo.');
+  }, duration);
+}
+function receiveFile(entry) {
+  if (receivers.get(entry.offer.id) !== entry || entry.receiver) return;
+  entry.receiver = new FileReceiver(entry.offer); entry.actions.replaceChildren(); entry.state.textContent = 'Recibiendo… 0%';
+  entry.card.querySelector('.item-meta span').textContent = 'ARCHIVO · RECIBIENDO';
+  addButton(entry.actions, 'Cancelar', () => { send({type:'failed',id:entry.offer.id,reason:'El receptor canceló el archivo'}); dropReceiver(entry.offer.id); }, 'subtle danger');
+  receiverTimeout(entry); send({type:'ack',key:`offer:${entry.offer.id}`});
+}
 function fileCard(offer) {
   const card = makeCard('ARCHIVO · SOLICITUD');
   const name = document.createElement('strong'); name.className = 'item-name'; name.textContent = safeName(offer.name);
   const state = document.createElement('div'); state.className = 'item-size'; state.textContent = `${fileKind(offer.name)} · ${sizeLabel(offer.size)} · Esperando tu permiso`;
   const actions = document.createElement('div'); actions.className = 'item-actions'; card.append(name, state, actions);
-  const entry = { offer, card, state, actions, receiver: null, timer: null }; receivers.set(offer.id, entry); usedMemory += offer.size;
-  controls();
-  entry.timer = setTimeout(() => { try { send({ type: 'failed', id: offer.id, reason: 'La solicitud de archivo expiró' }); } catch { /* disconnected */ } dropReceiver(offer.id); }, 90000);
-  addButton(actions, 'Recibir archivo', () => {
-    clearTimeout(entry.timer); entry.receiver = new FileReceiver(offer); actions.replaceChildren(); state.textContent = 'Recibiendo… 0%';
-    addButton(actions, 'Cancelar', () => { send({type:'failed',id:offer.id,reason:'El receptor canceló el archivo'}); dropReceiver(offer.id); }, 'subtle danger');
-    send({type:'ack',key:`offer:${offer.id}`});
-  }, 'primary');
-  addButton(actions, 'Rechazar', () => { clearTimeout(entry.timer); send({type:'failed',id:offer.id,reason:'El otro dispositivo rechazó el archivo'}); dropReceiver(offer.id); }, 'subtle');
+  const entry = {offer,card,state,actions,receiver:null,timer:null}; receivers.set(offer.id,entry); usedMemory += offer.size; controls();
+  if ($('auto-receive').checked) { receiveFile(entry); return; }
+  receiverTimeout(entry, 90000);
+  addButton(actions, 'Recibir archivo', () => receiveFile(entry), 'primary');
+  addButton(actions, 'Rechazar', () => { send({type:'failed',id:offer.id,reason:'El otro dispositivo rechazó el archivo'}); dropReceiver(offer.id); }, 'subtle');
 }
+
 async function handle(msg) {
   if (msg.type === 'room-closed') { reset(); toast('El otro dispositivo cerró la sala'); return; }
-  if (msg.type === 'approved' && !host) { remoteName = deviceName(msg.device); remoteKind = deviceName(msg.kind); connected(); return; }
+  if (msg.type === 'approved' && !host) { remoteName = deviceName(msg.device); remoteKind = deviceName(msg.kind); remoteType = deviceType(msg.deviceType, remoteKind); connected(); return; }
   if (!ready) return;
   if (msg.type === 'ack' && typeof msg.key === 'string' && msg.key.length < 100) { ack(msg.key); return; }
   if (msg.type === 'failed' && validId(msg.id)) {
@@ -338,11 +358,11 @@ async function handle(msg) {
   }
   if (msg.type === 'file-offer') {
     if (!validOffer(msg, usedMemory) || receivers.size || busy) throw new Error('Archivo no admitido, bandeja llena o hay otro envío en curso');
-    fileCard(msg); toast('Tienes un archivo por recibir'); return;
+    fileCard(msg); if (!$('auto-receive').checked) toast('Tienes un archivo por recibir'); return;
   }
   if (msg.type === 'file-chunk') {
     const entry = receivers.get(msg.id); if (!entry?.receiver) throw new Error('Archivo sin permiso de recepción');
-    entry.receiver.append(msg); entry.state.textContent = `Recibiendo… ${Math.floor(entry.receiver.size / entry.offer.size * 100)}%`;
+    entry.receiver.append(msg); receiverTimeout(entry); entry.state.textContent = `Recibiendo… ${Math.floor(entry.receiver.size / entry.offer.size * 100)}%`;
     send({type:'ack',key:`chunk:${msg.id}:${msg.index}`}); return;
   }
   if (msg.type === 'file-end') {
@@ -382,7 +402,7 @@ async function sendFiles(files) {
       const id = newCode(); outgoingId = id; $('transfer-progress').hidden = false; $('progress-name').textContent = safeName(file.name); $('progress-bar').value = 0; $('progress-label').textContent = 'Preparando archivo…';
       const hash = await digest(await file.arrayBuffer());
       if (outgoingId !== id || !ready) throw new Error('Envío cancelado');
-      $('progress-label').textContent = 'Espera a que el otro dispositivo pulse Recibir archivo';
+      $('progress-label').textContent = 'Preparando la recepción en tu otra pantalla…';
       await request({type:'file-offer', id, name:safeName(file.name), size:file.size, hash}, `offer:${id}`, 95000);
       let index = 0;
       for (let offset = 0; offset < file.size; offset += CHUNK_SIZE) {
@@ -430,6 +450,7 @@ $('file-zone').addEventListener('click', () => $('file-input').click());
 $('choose-photos').addEventListener('click', () => $('photo-input').click());
 $('file-input').addEventListener('change', e => stageFiles(e.target.files));
 $('photo-input').addEventListener('change', e => stageFiles(e.target.files));
+$('auto-receive').addEventListener('change', () => { if ($('auto-receive').checked) for (const entry of receivers.values()) receiveFile(entry); });
 $('send-files').addEventListener('click', () => sendFiles([...queuedFiles]));
 $('clear-files').addEventListener('click', () => { queuedFiles = []; renderQueue(); controls(); });
 for (const event of ['dragenter', 'dragover']) $('file-zone').addEventListener(event, e => { e.preventDefault(); if (!busy) $('file-zone').classList.add('drag-over'); });

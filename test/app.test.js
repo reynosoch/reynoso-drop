@@ -7,12 +7,14 @@ import * as protocol from '../protocol.js';
 import * as fileTools from '../files.js';
 import * as clipboardTools from '../clipboard.js';
 import * as qrTools from '../qr.js';
+import * as deviceTools from '../devices.js';
+import {peerRoundTrip} from './helpers/peer-codec.js';
 
 // Exercise real application event handlers without a network or browser.
-function setup({hash = '', clipboard = {}} = {}) {
+function setup({hash = '', clipboard = {}, autoReceive = true, userAgent = 'Windows', platform = 'Win32', maxTouchPoints = 0} = {}) {
   const elements = new Map(), timers = new Map(), peers = [], createdUrls = [], revokedUrls = [], windowEvents = new Map(); let timerId = 0;
   function node(tag = '') {
-    return {tagName:tag.toUpperCase(),focus(){},setSelectionRange(start,end){this.selectionStart=start;this.selectionEnd=end;},value:'',textContent:'',hidden:false,disabled:false,children:[],listeners:new Map(),replaceChildren(...children){this.children=children;},append(...children){this.children.push(...children);},prepend(...children){this.children.unshift(...children);},addEventListener(event,fn){this.listeners.set(event,fn);},fire(event){return this.listeners.get(event)?.({target:this});},classList:{add(){},remove(){}}};
+    return {tagName:tag.toUpperCase(),isConnected:true,focus(){},setSelectionRange(start,end){this.selectionStart=start;this.selectionEnd=end;},value:'',textContent:'',hidden:false,disabled:false,children:[],listeners:new Map(),replaceChildren(...children){this.children=[];this.append(...children);},append(...children){for(const child of children) child.parentNode=this;this.children.push(...children);},prepend(...children){for(const child of children) child.parentNode=this;this.children.unshift(...children);},remove(){if(this.parentNode)this.parentNode.children=this.parentNode.children.filter(child=>child!==this);this.isConnected=false;},querySelector(){return this.children.find(child=>child.className==='item-meta')?.children[0];},addEventListener(event,fn){this.listeners.set(event,fn);},fire(event){return this.listeners.get(event)?.({target:this});},classList:{add(){},remove(){}}};
   }
   function element(id) {
     if (!elements.has(id)) elements.set(id,node());
@@ -31,9 +33,10 @@ function setup({hash = '', clipboard = {}} = {}) {
   }
   const timersAPI = {setTimeout(fn, ms) { const id = ++timerId; timers.set(id,{fn,ms}); return id; },clearTimeout(id) { timers.delete(id); }};
   class TestURL extends URL { static createObjectURL(){const url=`blob:test-${createdUrls.length}`;createdUrls.push(url);return url;} static revokeObjectURL(url){revokedUrls.push(url);} }
-  const context = {...protocol, ...fileTools, ...clipboardTools, ...qrTools, ...timersAPI, crypto, TextEncoder, URL:TestURL, Blob, File,
-    document:{getElementById:element,createElement:node}, navigator:{userAgent:'Windows',platform:'Win32',maxTouchPoints:0,onLine:true,clipboard},
+  const context = {...protocol, ...fileTools, ...clipboardTools, ...qrTools, ...deviceTools, ...timersAPI, crypto, TextEncoder, URL:TestURL, Blob, File,
+    document:{getElementById:element,createElement:node}, navigator:{userAgent,platform,maxTouchPoints,onLine:true,clipboard},
     window:{Peer,RTCPeerConnection(){},addEventListener(event,fn){windowEvents.set(event,fn);}}, history:{replaceState(){}}, location:{href:`https://reynosoch.github.io/reynoso-drop/${hash}`,pathname:'/reynoso-drop/',search:'',hash}, confirm:()=>true};
+  element('auto-receive').checked=autoReceive;
   const source = readFileSync(new URL('../app.js',import.meta.url),'utf8').replace(/^import[^\n]+\n/gm,'');
   runInNewContext(source, context);
   function expire(ms) { for (const [id,timer] of [...timers]) if (timer.ms === ms && timers.has(id)) { timers.delete(id); timer.fn(); } }
@@ -86,11 +89,11 @@ test('el primer dispositivo conecta sin permiso, admite regreso y excluye un ter
   const first=new Connection({device:'iPad',kind:'iPad'}); host.emit('connection',first);
   assert.equal(element('remote-device-status').textContent,'Conectando…');
   first.establish(); assert.equal(first.messages[0].type,'approved'); assert.equal(first.messages[0].device,'Laptop personal');
-  assert.equal(element('device-count').textContent,'2 / 2 conectados');
+  assert.equal(element('device-count').textContent,'2 dispositivos');
   const third=new Connection({device:'Tercero'}); host.emit('connection',third); assert.equal(third.open,false); assert.equal(third.listenerCount('open'),0);
-  first.close(); assert.equal(host.destroyed,false); assert.equal(element('remote-device-status').textContent,'Sin conectar');
+  first.close(); assert.equal(host.destroyed,false); assert.equal(element('remote-device').hidden,true);
   const returning=new Connection({device:'iPad',kind:'iPad'}); host.emit('connection',returning); returning.establish();
-  assert.equal(returning.messages[0].type,'approved'); assert.equal(element('device-count').textContent,'2 / 2 conectados');
+  assert.equal(returning.messages[0].type,'approved'); assert.equal(element('device-count').textContent,'2 dispositivos');
 });
 test('sala sin conectar vence a los diez minutos y las colisiones se reintentan', () => {
   const {element,peers,expire}=setup(); element('create-room').fire('click'); const first=peers[0];
@@ -154,6 +157,51 @@ test('67 llega a la otra pantalla sin pulsar Permitir y el envío recibe confirm
 test('un canal que no abre no ocupa la sala indefinidamente ni finge conexión', () => {
   const {element,peers,Connection,expire}=setup(); element('create-room').fire('click'); const host=peers[0]; host.emit('open');
   const stalled=new Connection({device:'iPad'}); host.emit('connection',stalled); expire(30000);
-  assert.equal(element('device-count').textContent,'1 / 2 en sala'); assert.match(element('session-error').textContent,/canal de datos no abrió/);
-  const next=new Connection({device:'Laptop'}); host.emit('connection',next); next.establish(); assert.equal(element('device-count').textContent,'2 / 2 conectados');
+  assert.equal(element('device-count').textContent,'1 dispositivo'); assert.match(element('session-error').textContent,/canal de datos no abrió/);
+  const next=new Connection({device:'Laptop'}); host.emit('connection',next); next.establish(); assert.equal(element('device-count').textContent,'2 dispositivos');
+});
+
+test('sin sala solo muestra este dispositivo y la lista agrega y quita la pantalla real con su icono', () => {
+  const {element,peers,Connection}=setup(); assert.equal(element('remote-device').hidden,true);
+  assert.match(element('local-device-icon').innerHTML,/M8 21h8/); assert.equal(element('device-count').textContent,'1 dispositivo');
+  element('create-room').fire('click'); const host=peers[0]; host.emit('open'); assert.equal(element('remote-device').hidden,true);
+  const conn=new Connection({device:'iPad de Reynoso',kind:'iPad',deviceType:'tablet'});host.emit('connection',conn);conn.establish();
+  assert.equal(element('remote-device').hidden,false);assert.equal(element('remote-device-name').textContent,'iPad de Reynoso');
+  assert.match(element('remote-device-icon').innerHTML,/width="16" height="20"/);
+  conn.close();assert.equal(element('remote-device').hidden,true);assert.equal(element('device-count').textContent,'1 dispositivo');
+  const phone=new Connection({device:'Celular',kind:'iPhone'});host.emit('connection',phone);phone.establish();assert.match(element('remote-device-icon').innerHTML,/width="12" height="20"/);
+});
+function linkedSessions({autoReceive=true}={}) {
+  const sender=setup({hash:'#0012'}),receiver=setup({autoReceive,userAgent:'iPad Safari',platform:'MacIntel',maxTouchPoints:5});
+  receiver.element('create-room').fire('click');const host=receiver.peers[0];host.emit('open');
+  sender.expire(300);const guest=sender.peers[0];guest.emit('open');
+  const local=new receiver.Connection({device:'Laptop',kind:'Laptop Windows',deviceType:'computer'}),remote=guest.connection;
+  const downloaded=[];
+  local.send=async msg=>{if(msg.type==='ack'&&msg.key.startsWith('end:'))downloaded.push(receiver.element('inbox-items').children[0]);remote.emit('data',await peerRoundTrip(msg));};
+  remote.send=async msg=>local.emit('data',await peerRoundTrip(msg));
+  host.emit('connection',local);remote.establish();local.establish();
+  return {sender,receiver,local,remote,downloaded};
+}
+test('captura y Excel pasan por el codec real de PeerJS y llegan automáticamente con SHA verificado', async () => {
+  const {sender,receiver}=linkedSessions();await new Promise(resolve=>setImmediate(resolve));
+  const photoBytes=new Uint8Array(protocol.CHUNK_SIZE*2+23);for(let i=0;i<photoBytes.length;i++)photoBytes[i]=i%251;photoBytes.set([137,80,78,71,13,10,26,10]);
+  const files=[new File([photoBytes],'captura.png'),new File([new Uint8Array([80,75,3,4,0,255])],'reporte.xlsx')];
+  sender.element('file-input').files=files;sender.element('file-input').fire('change');
+  await sender.element('send-files').fire('click');
+  assert.equal(sender.element('file-selection').hidden,true);assert.equal(receiver.element('inbox-items').children.length,2);
+  for(const card of receiver.element('inbox-items').children){
+    assert.equal(card.children[0].children[0].textContent,'ARCHIVO · RECIBIDO');
+    assert.match(card.children[2].textContent,/Integridad verificada/);assert.equal(card.children[3].children[0].textContent,'Descargar');
+    assert.equal(card.children[3].children.some(button=>button.textContent==='Recibir archivo'),false);
+  }
+  assert.equal(receiver.element('session-error').textContent,'');
+});
+test('modo manual conserva aceptar/rechazar y activar automático libera la espera', async () => {
+  const {sender,receiver}=linkedSessions({autoReceive:false});await new Promise(resolve=>setImmediate(resolve));
+  sender.element('file-input').files=[new File(['contenido completo'],'manual.txt')];sender.element('file-input').fire('change');
+  const sending=sender.element('send-files').fire('click');await new Promise(resolve=>setImmediate(resolve));
+  const card=receiver.element('inbox-items').children[0];assert.equal(card.children[3].children[0].textContent,'Recibir archivo');
+  assert.equal(sender.element('file-selection').hidden,false);
+  receiver.element('auto-receive').checked=true;receiver.element('auto-receive').fire('change');await sending;
+  assert.equal(sender.element('file-selection').hidden,true);assert.match(card.children[2].textContent,/Integridad verificada/);
 });

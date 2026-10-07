@@ -26,12 +26,21 @@ export function validOffer(msg, used = 0) {
   return msg && validId(msg.id) && typeof msg.name === 'string' && msg.name.length > 0 && msg.name.length <= 255 && Number.isSafeInteger(msg.size) && msg.size >= 0 && msg.size <= MAX_FILE && used + msg.size <= MAX_MEMORY && typeof msg.hash === 'string' && /^[a-f0-9]{64}$/.test(msg.hash);
 }
 export async function digest(buffer) { return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', buffer)), b => b.toString(16).padStart(2, '0')).join(''); }
+const arrayBufferLength = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'byteLength').get;
+function chunkBytes(value) {
+  // PeerJS BinaryPack decodes binary payloads as Uint8Array, not ArrayBuffer.
+  if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  try { return new Uint8Array(value, 0, arrayBufferLength.call(value)); }
+  catch { throw new Error('Bloque de archivo no válido'); }
+}
 export class FileReceiver {
   constructor(offer) { if (!validOffer(offer)) throw new Error('Archivo no válido'); this.offer = offer; this.chunks = []; this.size = 0; this.index = 0; }
   append(msg) {
-    const data = msg.bytes;
-    if (msg.id !== this.offer.id || msg.index !== this.index || !(data instanceof ArrayBuffer) || data.byteLength !== Math.min(CHUNK_SIZE, this.offer.size - this.size) || data.byteLength === 0) throw new Error('Bloque de archivo no válido');
-    this.chunks.push(data); this.index++; this.size += data.byteLength;
+    if (msg.id !== this.offer.id || msg.index !== this.index) throw new Error('Bloque de archivo no válido');
+    const data = chunkBytes(msg.bytes);
+    if (data.byteLength !== Math.min(CHUNK_SIZE, this.offer.size - this.size) || data.byteLength === 0) throw new Error('Bloque de archivo no válido');
+    // Own only the view's bytes, excluding envelope prefixes/suffixes or later mutations.
+    this.chunks.push(data.slice()); this.index++; this.size += data.byteLength;
   }
   async finish() {
     if (this.size !== this.offer.size) throw new Error('Archivo incompleto');

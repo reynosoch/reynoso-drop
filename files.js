@@ -1,4 +1,4 @@
-import { MAX_FILE, MAX_MEMORY } from './protocol.js?v=1.4';
+import { MAX_FILE, MAX_MEMORY } from './protocol.js?v=1.5';
 export function fileKind(name) {
   const ext = String(name).split('.').pop().toLowerCase();
   if (['jpg','jpeg','png','gif','webp','avif','heic','heif','bmp','tif','tiff'].includes(ext)) return 'Foto';

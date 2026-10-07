@@ -12,7 +12,7 @@ Pasa texto, código y archivos entre dos laptops, un iPad o un teléfono. Sitio 
 4. La conexión es directa: **no se pide autorización al anfitrión**. Ambos aparecen por nombre y estado en **Dispositivos de esta sala** cuando abre el canal de datos. Si el equipo pierde la conexión, intenta volver una vez automáticamente sin reescribir el código.
 5. Pega con Ctrl/⌘+V en cualquier parte de la página; los campos de nombre y sala mantienen su pegado normal. Se admite texto, imágenes y archivos que exponga el navegador, no contenido arbitrario del portapapeles del sistema. El botón **Pegar contenido** intenta leer texto e imágenes cuando el navegador lo permite. Los textos de más de 400 líneas o 512 KB se preparan automáticamente como `.txt` completo; hasta 50 MB, sin truncar. Envía texto con el botón o Ctrl/⌘+Enter. El destinatario puede copiarlo o descargarlo como `.txt`.
 6. Agrega uno o varios archivos desde **Agregar fotos y archivos** o **Elegir fotos**, arrástralos a la zona de carga o pega una captura desde el portapapeles. Puedes preparar la selección antes de conectar; revisa nombres, tamaños y miniaturas, y quita lo que no quieras enviar.
-7. Con la otra pantalla conectada pulsa **Enviar archivos**. En el otro dispositivo pulsa **Recibir archivo** y después **Descargar**. Lo entregado sale de la selección; si cancelas o falla la conexión, los archivos pendientes quedan seleccionados para reintentar.
+7. Con la otra pantalla conectada pulsa **Enviar archivos**. Los archivos llegan a la bandeja de la otra pantalla automáticamente; pulsa **Descargar** para conservarlos. Si desactivas **Recibir archivos automáticamente**, puedes aceptar o rechazar cada archivo. Lo entregado sale de la selección; si cancelas o falla la conexión, los archivos pendientes quedan seleccionados para reintentar.
 
 Mantén ambas páginas abiertas y el iPad despierto durante el envío. La sala conecta **dos dispositivos** y funciona en ambas direcciones. Para otro dispositivo crea una sala nueva.
 
@@ -26,7 +26,7 @@ Mantén ambas páginas abiertas y el iPad despierto durante el envío. La sala c
 - Los códigos sin conexión expiran a los **10 minutos**. La sesión conectada sigue activa mientras ambas páginas estén abiertas. Tras una desconexión el anfitrión conserva la sala durante otros 10 minutos; el invitado hace un intento de reconexión automática. Una negociación que no abre canal se cancela a los **30 segundos** y explica que no hay autorización pendiente. Se muestran estados basados en el canal y en ICE; encontrar la sala no se presenta como transferencia disponible.
 - Se aceptan archivos de hasta **50 MB** y textos de hasta **512 KB** por envío. La bandeja admite 30 elementos y reserva hasta **100 MB** de contenido. El uso real de memoria puede ser mayor durante lectura y verificación; usa archivos más pequeños en iPad.
 - Los archivos se envían secuencialmente en bloques de 64 KB con confirmación. SHA-256 comprueba que los bytes recibidos coinciden. Las fotos raster compatibles muestran vista previa después de verificar el archivo; HTML, SVG y documentos no se ejecutan ni se previsualizan como páginas.
-- El destinatario acepta los archivos individualmente. Puedes cancelar; un envío solo se da por entregado después de la confirmación remota.
+- La recepción en memoria es automática por defecto dentro de la sala conectada. Puedes desactivar **Recibir archivos automáticamente** para aprobar cada envío. No se descargan ni ejecutan archivos automáticamente. Una recepción detenida libera su reserva tras 30 segundos sin bloques válidos. Puedes cancelar; un envío solo se da por entregado después de la confirmación remota.
 
 ## Fotos y archivos de trabajo
 
@@ -40,7 +40,7 @@ Mantén ambas páginas abiertas y el iPad despierto durante el envío. La sala c
 
 ## Red y descubrimiento de dispositivos
 
-La lista muestra **los dos dispositivos que participan en la sala**, con su nombre y estado real; no representa un inventario del Wi-Fi. El navegador puede informar el estado general de conexión y, cuando ofrece esa información, el tipo Wi-Fi/Ethernet/móvil. No expone el nombre de tu red ni proporciona descubrimiento general de equipos cercanos. Estar en la misma red no sustituye el primer código.
+La lista muestra **solo los dispositivos presentes**, en filas con icono de iPad/tablet, celular o computadora. Sin sala o esperando a alguien aparece únicamente tu dispositivo; al desconectar la otra pantalla se elimina su fila. El tipo se informa al conectar, con detección de iPad en modo escritorio y Android móvil/tablet, y compatibilidad con los nombres de versiones anteriores. La lista no representa un inventario del Wi-Fi. El navegador puede informar el estado general de conexión y, cuando ofrece esa información, el tipo Wi-Fi/Ethernet/móvil. No expone el nombre de tu red ni proporciona descubrimiento general de equipos cercanos. Estar en la misma red no sustituye el primer código.
 
 Para encontrar equipos de una LAN automáticamente hace falta un servicio local o una app instalada. Esta versión conserva GitHub Pages y cero base de datos; no escanea rangos IP, no inventa equipos ni supone que dos visitantes están en la misma red.
 
@@ -65,8 +65,12 @@ GitHub Pages publica directamente **main / (root)**; `.nojekyll` desactiva Jekyl
 
 ## AGENT_CONTEXT
 
-Este proyecto es independiente del reconciliador Visteon. Mantén el alcance: transferencia temporal entre dos dispositivos, sin persistencia ni secretos. No agregues Supabase, almacenamiento remoto ni guardado de archivos en GitHub. La conexión por código/QR es automática por instrucción expresa del usuario (v1.4), sin confirmación del anfitrión. Conserva el permiso individual de recepción de archivos, límites de memoria y verificación SHA-256. No uses credenciales corporativas. Cambios directos en main; ejecutar check/build y verificar Actions/Pages al publicar. La prueba en una red externa no confirma compatibilidad con la red corporativa.
+Este proyecto es independiente del reconciliador Visteon. Mantén el alcance: transferencia temporal entre dos dispositivos, sin persistencia ni secretos. No agregues Supabase, almacenamiento remoto ni guardado de archivos en GitHub. La conexión por código/QR es automática por instrucción expresa del usuario (v1.4), sin confirmación del anfitrión. La recepción de archivos es automática por defecto para reducir fricción (v1.5); conserva el modo manual opcional, límites de memoria y verificación SHA-256. No descargues ni ejecutes contenido automáticamente. No uses credenciales corporativas. Cambios directos en main; ejecutar check/build y verificar Actions/Pages al publicar. La prueba en una red externa no confirma compatibilidad con la red corporativa.
 
 El QR se genera localmente con qrcode-generator 1.4.4 (MIT); contiene solo el enlace y el código de la sala, nunca tus archivos. La interfaz utiliza superficies más claras y bordes de mayor contraste. El footer enlaza al perfil `/reynosoch` en GitHub.
 
-Los QR y enlaces nuevos incluyen `?v=1.4` para cargar el HTML de la nueva versión; los módulos también tienen versiones en sus URL. Tras actualizar, recarga ambas pantallas y crea una sala nueva. Eliminar el permiso del anfitrión no garantiza que el canal WebRTC sea permitido por una red corporativa o VPN.
+Los QR y enlaces nuevos incluyen `?v=1.5` para cargar el HTML de la nueva versión; los módulos también tienen versiones en sus URL. Tras actualizar, recarga ambas pantallas y crea una sala nueva. Eliminar el permiso del anfitrión no garantiza que el canal WebRTC sea permitido por una red corporativa o VPN.
+
+## Corrección de transferencias v1.5
+
+PeerJS BinaryPack entrega los bloques binarios como `Uint8Array`. El receptor admite vistas binarias y `ArrayBuffer`, conserva solo los bytes de la vista, comprueba tamaño y orden, y verifica SHA-256 al completar. Las pruebas pasan capturas y documentos por el codec real de PeerJS incluido en `vendor/`, además de comprobar bloques con offsets, contextos distintos, corrupción y recepción automática/manual. Se reprodujo el error «Bloque de archivo no válido» con el codec real antes de aplicar la corrección.
