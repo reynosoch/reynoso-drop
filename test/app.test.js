@@ -12,7 +12,7 @@ import * as qrTools from '../qr.js';
 function setup({hash = '', clipboard = {}} = {}) {
   const elements = new Map(), timers = new Map(), peers = [], createdUrls = [], revokedUrls = [], windowEvents = new Map(); let timerId = 0;
   function node(tag = '') {
-    return {tagName:tag.toUpperCase(),focus(){},setSelectionRange(start,end){this.selectionStart=start;this.selectionEnd=end;},value:'',textContent:'',hidden:false,disabled:false,children:[],listeners:new Map(),replaceChildren(...children){this.children=children;},append(...children){this.children.push(...children);},addEventListener(event,fn){this.listeners.set(event,fn);},fire(event){return this.listeners.get(event)?.({target:this});},classList:{add(){},remove(){}}};
+    return {tagName:tag.toUpperCase(),focus(){},setSelectionRange(start,end){this.selectionStart=start;this.selectionEnd=end;},value:'',textContent:'',hidden:false,disabled:false,children:[],listeners:new Map(),replaceChildren(...children){this.children=children;},append(...children){this.children.push(...children);},prepend(...children){this.children.unshift(...children);},addEventListener(event,fn){this.listeners.set(event,fn);},fire(event){return this.listeners.get(event)?.({target:this});},classList:{add(){},remove(){}}};
   }
   function element(id) {
     if (!elements.has(id)) elements.set(id,node());
@@ -57,7 +57,7 @@ test('pegar una captura la agrega como archivo y limpiar revoca las miniaturas t
 });
 test('envía varios documentos originales y retira de la cola solo los confirmados', async () => {
   const {element,peers,Connection}=setup(); element('create-room').fire('click'); const host=peers[0]; host.emit('open');
-  const conn=new Connection({device:'Otra laptop',token:protocol.newCode()}); host.emit('connection',conn); conn.establish(); element('accept-device').fire('click');
+  const conn=new Connection({device:'Otra laptop',token:protocol.newCode()}); host.emit('connection',conn); conn.establish();
   conn.send=msg=>{
     conn.messages.push(msg);
     const key=msg.type==='file-offer'?`offer:${msg.id}`:msg.type==='file-chunk'?`chunk:${msg.id}:${msg.index}`:msg.type==='file-end'?`end:${msg.id}`:null;
@@ -80,18 +80,17 @@ test('el cuarto número conecta automáticamente; tres números no abren una sal
   peers[0].emit('open'); assert.equal(peers[0].target,'reynoso-drop-0012');
   assert.equal(element('room-code').textContent,'0012'); assert.equal(element('send-text').disabled,true);
 });
-test('equipos nuevos necesitan permiso; el autorizado vuelve solo y la lista conserva el estado real', () => {
-  const {element,peers,Connection} = setup(); element('device-name').value='Laptop personal'; element('create-room').fire('click');
+test('el primer dispositivo conecta sin permiso, admite regreso y excluye un tercer equipo', () => {
+  const {element,peers,Connection}=setup(); element('device-name').value='Laptop personal'; element('create-room').fire('click');
   const host=peers[0]; host.emit('open'); assert.match(host.id,/^reynoso-drop-\d{4}$/);
-  const token=protocol.newCode(); const first=new Connection({device:'iPad',kind:'iPad',token});
-  host.emit('connection',first); first.establish(); assert.equal(element('device-request').hidden,false); assert.equal(element('remote-device-name').textContent,'iPad');
-  assert.equal(first.messages.length,0); element('accept-device').fire('click');
-  assert.equal(first.messages[0].type,'approved'); assert.equal(first.messages[0].device,'Laptop personal'); assert.equal(element('device-count').textContent,'2 / 2 conectados');
+  const first=new Connection({device:'iPad',kind:'iPad'}); host.emit('connection',first);
+  assert.equal(element('remote-device-status').textContent,'Conectando…');
+  first.establish(); assert.equal(first.messages[0].type,'approved'); assert.equal(first.messages[0].device,'Laptop personal');
+  assert.equal(element('device-count').textContent,'2 / 2 conectados');
+  const third=new Connection({device:'Tercero'}); host.emit('connection',third); assert.equal(third.open,false); assert.equal(third.listenerCount('open'),0);
   first.close(); assert.equal(host.destroyed,false); assert.equal(element('remote-device-status').textContent,'Sin conectar');
-  const returning=new Connection({device:'iPad',kind:'iPad',token}); host.emit('connection',returning); returning.establish();
-  assert.equal(returning.messages[0].type,'approved'); assert.equal(element('device-request').hidden,true);
-  returning.close(); const other=new Connection({device:'Laptop corporativa',kind:'Laptop Windows',token:protocol.newCode()}); host.emit('connection',other); other.establish();
-  assert.equal(other.messages.length,0); assert.equal(element('device-request').hidden,false);
+  const returning=new Connection({device:'iPad',kind:'iPad'}); host.emit('connection',returning); returning.establish();
+  assert.equal(returning.messages[0].type,'approved'); assert.equal(element('device-count').textContent,'2 / 2 conectados');
 });
 test('sala sin conectar vence a los diez minutos y las colisiones se reintentan', () => {
   const {element,peers,expire}=setup(); element('create-room').fire('click'); const first=peers[0];
@@ -126,7 +125,7 @@ test('el botón Pegar lee imágenes y texto y no solicita acceso al cargar', asy
 });
 test('enviar texto escrito con 401 líneas utiliza transferencia binaria y conserva los bytes', async () => {
   const {element,peers,Connection}=setup(); element('create-room').fire('click'); const host=peers[0]; host.emit('open');
-  const conn=new Connection({token:protocol.newCode()}); host.emit('connection',conn); conn.establish(); element('accept-device').fire('click');
+  const conn=new Connection({token:protocol.newCode()}); host.emit('connection',conn); conn.establish();
   conn.send=msg=>{conn.messages.push(msg); const key=msg.type==='file-offer'?`offer:${msg.id}`:msg.type==='file-chunk'?`chunk:${msg.id}:${msg.index}`:msg.type==='file-end'?`end:${msg.id}`:null; if(key) conn.emit('data',{type:'ack',key});};
   const text=Array.from({length:401},(_,i)=>`línea ${i}: ñ 😊`).join('\r\n');
   element('text-input').value=text; element('text-input').fire('input'); assert.match(element('send-text').textContent,/\.txt/);
@@ -135,4 +134,26 @@ test('enviar texto escrito con 401 líneas utiliza transferencia binaria y conse
   const offer=conn.messages.find(msg=>msg.type==='file-offer'); assert.match(offer.name,/\.txt$/);
   const receiver=new protocol.FileReceiver(offer); for(const chunk of conn.messages.filter(msg=>msg.type==='file-chunk')) receiver.append(chunk);
   assert.equal(await (await receiver.finish()).text(),text); assert.equal(element('file-selection').hidden,true);
+});
+
+test('67 llega a la otra pantalla sin pulsar Permitir y el envío recibe confirmación', async () => {
+  const a=setup(), b=setup({hash:'#0012'});
+  a.element('create-room').fire('click'); const host=a.peers[0]; host.emit('open');
+  b.expire(300); const guest=b.peers[0]; guest.emit('open');
+  const local=new a.Connection({device:'iPad',kind:'iPad'}), remote=guest.connection;
+  local.send=msg=>queueMicrotask(()=>remote.emit('data',structuredClone(msg)));
+  remote.send=msg=>queueMicrotask(()=>local.emit('data',structuredClone(msg)));
+  host.emit('connection',local); remote.establish(); local.establish(); await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(a.element('status').textContent,'Conectado'); assert.equal(b.element('status').textContent,'Conectado');
+  b.element('text-input').value='67'; b.element('text-input').fire('input'); assert.equal(b.element('send-text').disabled,false);
+  await b.element('send-text').fire('click');
+  assert.equal(a.element('inbox-items').children[0].children[1].textContent,'67');
+  assert.equal(b.element('inbox-items').children[0].children[1].textContent,'67');
+  assert.equal(b.element('text-input').value,'');
+});
+test('un canal que no abre no ocupa la sala indefinidamente ni finge conexión', () => {
+  const {element,peers,Connection,expire}=setup(); element('create-room').fire('click'); const host=peers[0]; host.emit('open');
+  const stalled=new Connection({device:'iPad'}); host.emit('connection',stalled); expire(30000);
+  assert.equal(element('device-count').textContent,'1 / 2 en sala'); assert.match(element('session-error').textContent,/canal de datos no abrió/);
+  const next=new Connection({device:'Laptop'}); host.emit('connection',next); next.establish(); assert.equal(element('device-count').textContent,'2 / 2 conectados');
 });

@@ -1,12 +1,11 @@
-import { MAX_TEXT, MAX_FILE, MAX_MEMORY, CHUNK_SIZE, newCode, newRoomCode, formatCode, parseCode, deviceName, trustedReconnect, validId, safeName, sizeLabel, validOffer, digest, FileReceiver } from './protocol.js?v=1.3';
-import { fileKind, extendQueue, imageMime } from './files.js?v=1.3';
-import { lineCount, needsTextFile, textFile } from './clipboard.js?v=1.3';
-import { drawRoomQR } from './qr.js?v=1.3';
+import { MAX_TEXT, MAX_FILE, MAX_MEMORY, CHUNK_SIZE, newCode, newRoomCode, formatCode, parseCode, deviceName, validId, safeName, sizeLabel, validOffer, digest, FileReceiver } from './protocol.js?v=1.4';
+import { fileKind, extendQueue, imageMime } from './files.js?v=1.4';
+import { lineCount, needsTextFile, textFile } from './clipboard.js?v=1.4';
+import { drawRoomQR } from './qr.js?v=1.4';
 const $ = id => document.getElementById(id);
 let peer = null, connection = null, incoming = null, ready = false, room = '', host = false;
 let connectTimer, signalTimer, toastTimer, outgoingId = null, busy = false, usedMemory = 0;
-let autoJoinTimer, roomExpiryTimer, reconnectTimer, remoteName = '', remoteKind = '', roomName = '', trustedToken = null;
-const clientToken = newCode(); // Page-lifetime identity, never stored on disk.
+let autoJoinTimer, roomExpiryTimer, reconnectTimer, remoteName = '', remoteKind = '', roomName = '';
 const ROOM_TTL = 10 * 60 * 1000;
 const pending = new Map(), receivers = new Map(), urls = new Set();
 let queuedFiles = [], queueGeneration = 0;
@@ -18,12 +17,12 @@ function renderDevices() {
   $('local-device-detail').textContent = `${device} · Este dispositivo`;
   $('local-device-status').textContent = ready ? 'Listo para enviar' : room ? 'En la sala' : 'Disponible';
   $('local-device-status').className = `device-state${ready ? ' live' : ''}`;
-  const pendingDevice = incoming?.open;
+  const pendingDevice = Boolean(incoming);
   $('remote-device-name').textContent = remoteName || 'Tu otra pantalla';
   $('remote-device-detail').textContent = remoteKind || (room ? 'Abre Drop en el otro dispositivo' : 'Laptop, iPad o teléfono');
-  $('remote-device-status').textContent = ready ? 'Conectado' : pendingDevice ? 'Solicita permiso' : !host && room ? 'Conectando…' : 'Sin conectar';
+  $('remote-device-status').textContent = ready ? 'Conectado' : pendingDevice ? 'Conectando…' : !host && room ? 'Conectando…' : 'Sin conectar';
   $('remote-device-status').className = `device-state${ready ? ' live' : ''}`;
-  $('device-count').textContent = ready ? '2 / 2 conectados' : pendingDevice ? '1 + solicitud' : room ? '1 / 2 en sala' : 'Sin sala';
+  $('device-count').textContent = ready ? '2 / 2 conectados' : pendingDevice ? '1 + conectando' : room ? '1 / 2 en sala' : 'Sin sala';
   $('device-name').disabled = Boolean(room);
 }
 function networkInfo() {
@@ -146,7 +145,6 @@ function dropReceiver(id, message) {
 function reset() {
   ready = false; room = ''; host = false;
   remoteName = remoteKind = roomName = '';
-  trustedToken = null;
   clearTimeout(autoJoinTimer); clearTimeout(roomExpiryTimer); clearTimeout(reconnectTimer);
   clearTimeout(connectTimer); clearTimeout(signalTimer);
   for (const key of [...pending.keys()]) ack(key, null, 'La sala se cerró');
@@ -154,7 +152,7 @@ function reset() {
   const previous = connection, next = incoming, previousPeer = peer;
   connection = incoming = peer = null;
   previous?.close(); next?.close(); previousPeer?.destroy();
-  $('device-request').hidden = true; $('room-details').hidden = true; $('qr-panel').hidden = true; $('setup').hidden = false;
+  $('room-details').hidden = true; $('qr-panel').hidden = true; $('setup').hidden = false;
   $('create-room').disabled = $('join-room').disabled = false;
   status('Sin conexión'); controls(); renderDevices();
   history.replaceState(null, '', location.pathname + location.search);
@@ -163,7 +161,7 @@ function disconnected(conn) {
   if (conn !== connection && conn !== incoming) return;
   if (host) {
     clearTimeout(connectTimer);
-    if (conn === incoming) { incoming = null; remoteName = remoteKind = ''; $('device-request').hidden = true; renderDevices(); return; }
+    if (conn === incoming) { incoming = null; remoteName = remoteKind = ''; status('Esperando dispositivo', 'waiting'); renderDevices(); return; }
     connection = null; ready = false;
     for (const key of [...pending.keys()]) ack(key, null, 'El otro dispositivo se desconectó');
     for (const id of [...receivers.keys()]) dropReceiver(id);
@@ -187,35 +185,51 @@ function connected() {
 }
 function showRoom() {
   $('setup').hidden = true; $('room-details').hidden = false; $('room-code').textContent = formatCode(room);
-  $('connection-hint').textContent = host ? 'Escribe estos 4 números o escanea el QR en tu otra pantalla. Aquí solo tendrás que permitir su conexión. El código vence en 10 minutos si no conectas.' : 'Conectando automáticamente. El primer dispositivo debe permitir tu acceso.';
+  $('connection-hint').textContent = host ? 'Escribe estos 4 números o escanea el QR en tu otra pantalla. Conecta directamente, sin pedir permiso al anfitrión. El código vence en 10 minutos si no conectas.' : 'Conectando directamente con la otra pantalla…';
   if (host) {
-    try { const url = new URL(location.href); url.hash = room; drawRoomQR($('room-qr'), url.href); $('qr-panel').hidden = false; }
+    try { const url = roomURL(); drawRoomQR($('room-qr'), url.href); $('qr-panel').hidden = false; }
     catch (e) { toast(e.message); }
   }
   status(host ? 'Esperando dispositivo' : 'Conectando…', 'waiting');
   renderDevices();
 }
+function roomURL() { const url = new URL(location.href); url.searchParams.set('v', '1.4'); url.hash = room; return url; }
+function watchConnection(conn) {
+  const rtc = conn.peerConnection; if (!rtc?.addEventListener) return;
+  const update = () => {
+    if (conn !== connection && conn !== incoming || ready) return;
+    if (rtc.iceConnectionState === 'checking') {
+      status('Abriendo canal de datos…', 'waiting');
+      $('connection-hint').textContent = 'La sala respondió. Estableciendo el enlace entre las dos pantallas; no necesitas autorizar nada.';
+    }
+    if (rtc.iceConnectionState === 'failed') {
+      disconnected(conn); conn.close();
+      error('La sala respondió, pero el canal de datos falló. La red, la VPN o el servicio de conexión pueden impedir el enlace entre dispositivos.');
+    }
+  };
+  rtc.addEventListener('iceconnectionstatechange', update); update();
+}
 function wire(conn, isIncoming) {
-  conn.on('error', () => disconnected(conn));
+  conn.on('error', () => { disconnected(conn); error('No se pudo abrir el canal entre dispositivos. No hay un permiso pendiente; revisa que ambas páginas estén abiertas.'); });
   conn.on('close', () => disconnected(conn));
   conn.on('open', () => {
     if (isIncoming) {
       if (incoming !== conn) { conn.close(); return; }
+      clearTimeout(connectTimer);
+      connection = conn; incoming = null;
       remoteName = deviceName(conn.metadata?.device);
       remoteKind = deviceName(conn.metadata?.kind, 'Otro dispositivo');
-      if (trustedReconnect(trustedToken, conn.metadata?.token)) { connection = conn; incoming = null; send({type:'approved',device:roomName,kind:device}); connected(); return; }
-      $('request-name').textContent = `${remoteName} quiere conectar`;
-      $('device-request').hidden = false;
-      renderDevices();
-      connectTimer = setTimeout(() => { if (incoming === conn) { incoming = null; remoteName = remoteKind = ''; conn.close(); $('device-request').hidden = true; renderDevices(); toast('La solicitud de conexión expiró'); } }, 90000);
-    } else { status('Esperando permiso', 'waiting'); renderDevices(); }
+      // Automatic room handshake; this message never requires user approval.
+      send({type:'approved',device:roomName,kind:device}); connected();
+    } else { status('Terminando conexión…', 'waiting'); renderDevices(); }
   });
   conn.on('data', msg => {
-    if (conn === incoming) return; // Nothing is accepted before local device approval.
-    if (conn !== connection || !msg || typeof msg !== 'object') return;
+    if (conn === incoming || conn !== connection || !msg || typeof msg !== 'object') return;
     handle(msg).catch(e => { error(e.message); if (validId(msg.id)) { try { send({ type: 'failed', id: msg.id, reason: e.message }); } catch { /* disconnected */ } dropReceiver(msg.id); } });
   });
+  watchConnection(conn);
 }
+
 function start(isHost, code, collisionAttempts = 0) {
   reset(); $('session-error').hidden = true;
   if (!window.Peer || !window.RTCPeerConnection || !crypto.subtle) { error('Este navegador no permite WebRTC. Usa una versión reciente de Chrome, Edge o Safari mediante HTTPS.'); return; }
@@ -241,14 +255,22 @@ function start(isHost, code, collisionAttempts = 0) {
     if (host) {
       roomExpiryTimer = setTimeout(() => { if (peer === instance && !ready) { reset(); toast('El código venció. Crea una sala nueva.'); } }, ROOM_TTL);
     } else {
-      connection = instance.connect(`reynoso-drop-${room}`, { reliable: true, serialization: 'binary', metadata: { device:roomName, kind:device, token:clientToken } });
+      connection = instance.connect(`reynoso-drop-${room}`, { reliable: true, serialization: 'binary', metadata: { device:roomName, kind:device } });
       wire(connection, false);
-      connectTimer = setTimeout(() => { if (!ready && peer === instance) { reset(); error('No conectó. Revisa que el primer dispositivo esté abierto y acepte el permiso. Si la red corporativa bloquea WebRTC, consulta con TI.'); } }, 90000);
+      connectTimer = setTimeout(() => { if (!ready && peer === instance) { reset(); error('No se abrió el canal entre las dos pantallas. No hay una autorización pendiente. Mantén ambas páginas abiertas; la red, la VPN o el servicio de conexión pueden impedir el enlace.'); } }, 30000);
     }
   });
   instance.on('connection', conn => {
     if (!host || incoming || connection || peer !== instance) { conn.close(); return; }
-    incoming = conn; wire(conn, true);
+    incoming = conn;
+    remoteName = deviceName(conn.metadata?.device); remoteKind = deviceName(conn.metadata?.kind, 'Otro dispositivo');
+    status('Conectando dispositivo…', 'waiting'); renderDevices();
+    wire(conn, true);
+    connectTimer = setTimeout(() => {
+      if (incoming !== conn || ready) return;
+      disconnected(conn); conn.close();
+      error('La otra pantalla encontró la sala, pero el canal de datos no abrió. La red, la VPN o el servicio de conexión pueden impedir el enlace.');
+    }, 30000);
   });
   instance.on('error', e => {
     if (peer !== instance) return;
@@ -397,10 +419,8 @@ $('join-room').addEventListener('click', joinRoom);
 $('room-input').addEventListener('input', scheduleJoin);
 $('device-name').addEventListener('input', renderDevices);
 $('room-input').addEventListener('keydown', e => { if (e.key === 'Enter' && !$('join-room').disabled) $('join-room').click(); });
-$('accept-device').addEventListener('click', () => { if (!incoming?.open) return; clearTimeout(connectTimer); trustedToken = validId(incoming.metadata?.token) ? incoming.metadata.token : null; connection = incoming; incoming = null; $('device-request').hidden = true; send({type:'approved',device:roomName,kind:device}); connected(); });
-$('reject-device').addEventListener('click', () => { const conn = incoming; incoming = null; remoteName = remoteKind = ''; clearTimeout(connectTimer); conn?.close(); $('device-request').hidden = true; renderDevices(); toast('Dispositivo rechazado'); });
 $('copy-code').addEventListener('click', () => copy(formatCode(room)));
-$('copy-link').addEventListener('click', () => { const url = new URL(location.href); url.hash = room; copy(url.href); });
+$('copy-link').addEventListener('click', () => copy(roomURL().href));
 $('leave-room').addEventListener('click', () => { if (connection?.open) send({type:'room-closed'}); reset(); toast('Sala cerrada'); });
 $('text-input').addEventListener('input', countText);
 $('text-input').addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); sendText(); } if (e.key === 'Tab') { e.preventDefault(); const area = e.target; const start = area.selectionStart; area.setRangeText('  ', start, area.selectionEnd, 'end'); countText(); } });

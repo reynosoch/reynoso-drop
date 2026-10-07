@@ -1,4 +1,4 @@
-import { MAX_TEXT, MAX_FILE } from './protocol.js?v=1.3';
+import { MAX_TEXT, MAX_FILE } from './protocol.js?v=1.4';
 
 export function lineCount(text) {
   let count = 1;
