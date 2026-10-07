@@ -1,10 +1,23 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {newCode,parseCode,formatCode,validOffer,safeName,digest,FileReceiver,CHUNK_SIZE,MAX_FILE,MAX_MEMORY} from '../protocol.js';
+import {newCode,newRoomCode,parseCode,formatCode,deviceName,trustedReconnect,validOffer,safeName,digest,FileReceiver,CHUNK_SIZE,MAX_FILE,MAX_MEMORY} from '../protocol.js';
 test('códigos aleatorios y enlaces conservan la sala sin aceptar contenido arbitrario', () => {
   const code = newCode(); assert.match(code,/^[a-f0-9]{24}$/); assert.notEqual(code,newCode());
   assert.equal(parseCode(formatCode(code).toUpperCase()),code); assert.equal(parseCode(`https://reynosoch.github.io/reynoso-drop/#${code}`),code);
-  assert.equal(parseCode('<script>alert(1)</script>'),null); assert.equal(parseCode('123456'),null);
+  assert.equal(parseCode('<script>alert(1)</script>'),null);
+});
+test('salas de seis números conservan ceros, admiten escritura manual y enlaces', () => {
+  for(let i=0;i<100;i++) assert.match(newRoomCode(), /^\d{6}$/);
+  assert.equal(formatCode('001234'),'001 234'); assert.equal(parseCode('001 234'),'001234');
+  assert.equal(parseCode('001-234'),'001234'); assert.equal(parseCode('https://reynosoch.github.io/reynoso-drop/#001234'),'001234');
+  for(const bad of ['12345','1234567','12a456','00000000']) assert.equal(parseCode(bad),null);
+});
+test('la reconexión solo confía en la identidad larga aprobada, no en el código corto', () => {
+  const token=newCode(); assert.equal(trustedReconnect(token,token),true);
+  assert.equal(trustedReconnect(token,newCode()),false); assert.equal(trustedReconnect(null,token),false);
+  assert.equal(trustedReconnect('123456','123456'),false);
+  assert.equal(deviceName('  Laptop personal\n\u0000  '),'Laptop personal'); assert.equal(deviceName(null),'Otro dispositivo');
+  assert.equal(deviceName('a'.repeat(100)).length,40);
 });
 test('ofertas limitan memoria, tamaños e identificadores; nombres no atraviesan rutas', async () => {
   const base = {id:newCode(),name:'demo.txt',size:0,hash:await digest(new ArrayBuffer(0))};

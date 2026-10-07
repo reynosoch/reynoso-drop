@@ -7,9 +7,9 @@ Pasa texto, código y archivos entre dos laptops, un iPad o un teléfono. Sitio 
 ## Uso
 
 1. Abre la app en ambos dispositivos.
-2. En el primero pulsa **Crear sala** y copia su código o enlace.
-3. En el segundo pega el código y pulsa **Conectar**. Un enlace rellena el código; debes pulsar Conectar.
-4. En el primero pulsa **Permitir** al reconocer tu dispositivo.
+2. Puedes nombrar las pantallas, por ejemplo **Laptop personal**, **Laptop corporativa** o **iPad**. En el primero pulsa **Crear sala**: aparece un código de **6 números**, como `123 456`.
+3. En el segundo escribe los 6 números: al completar el sexto se intenta conectar automáticamente. También puedes pegar o abrir el enlace; inicia el mismo proceso sin otro clic. **Conectar** y Enter siguen disponibles para reintentar.
+4. En el primero pulsa **Permitir** al reconocer tu dispositivo. Ambos aparecen por nombre y estado en **Dispositivos de esta sala**. El primer permiso se conserva mientras la página esté abierta: si el equipo autorizado pierde la conexión, intenta volver una vez automáticamente sin reescribir el código ni pedir otro permiso.
 5. Envía texto con el botón o Ctrl/⌘+Enter. El destinatario puede copiarlo o descargarlo como `.txt`.
 6. Elige o arrastra uno o varios archivos. En el otro dispositivo pulsa **Recibir archivo** y después **Descargar**.
 
@@ -21,11 +21,17 @@ Mantén ambas páginas abiertas y el iPad despierto durante el envío. La sala c
 - Los mensajes y archivos recibidos quedan en memoria del navegador; al recargar o cerrar se pierden. Descarga lo que necesites conservar.
 - No hay localStorage, IndexedDB, cookies propias, analítica, login, API keys ni base de datos.
 - PeerJS Cloud gratuito intercambia los metadatos de conexión (señalización). El contenido viaja por el canal de datos WebRTC cifrado, directo cuando es posible y mediante el relay TURN de PeerJS cuando hace falta. No hay respaldo de almacenamiento. Se usan los servidores y credenciales públicos STUN/TURN oficiales de la versión fijada, con candidatos TURN UDP y TCP en el puerto 3478; su disponibilidad depende del proveedor y de la red. Estas credenciales públicas pertenecen al servicio compartido de PeerJS, no al usuario.
-- El código de sala contiene 96 bits aleatorios. No es una contraseña corporativa: compártelo solo con el dispositivo destinatario. El anfitrión debe permitir cada conexión.
-- Las salas no expiran por reloj mientras la página esté abierta. Las solicitudes pendientes expiran a los 90 segundos. **Cerrar sala** revoca la sesión.
+- El código de sala tiene **6 dígitos aleatorios** y conserva los ceros iniciales. Las colisiones se reintentan automáticamente con otro código, hasta cuatro veces. Al ser corto, el código identifica la sala pero **no autoriza acceso por sí solo**: el anfitrión permite el primer dispositivo. La reconexión del equipo autorizado verifica además un identificador aleatorio de 96 bits que existe solo durante la vida de esa página. No uses contraseñas corporativas.
+- Los códigos sin conexión expiran a los **10 minutos**. La sesión conectada sigue activa mientras ambas páginas estén abiertas. Tras una desconexión el anfitrión conserva la sala durante otros 10 minutos; el invitado hace un intento de reconexión automática. Las solicitudes pendientes expiran a los 90 segundos. **Cerrar sala** revoca la sesión y el permiso recordado. Recargar también pierde esa identidad temporal; no se promete reconexión tras recargar.
 - Se aceptan archivos de hasta **50 MB** y textos de hasta **512 KB** por envío. La bandeja admite 30 elementos y reserva hasta **100 MB** de contenido. El uso real de memoria puede ser mayor durante lectura y verificación; usa archivos más pequeños en iPad.
 - Los archivos se envían secuencialmente en bloques de 64 KB con confirmación. SHA-256 comprueba que los bytes recibidos coinciden. No se previsualiza ni ejecuta contenido recibido.
 - El destinatario acepta los archivos individualmente. Puedes cancelar; un envío solo se da por entregado después de la confirmación remota.
+
+## Red y descubrimiento de dispositivos
+
+La lista muestra **los dos dispositivos que participan en la sala**, con su nombre y estado real; no representa un inventario del Wi-Fi. El navegador puede informar el estado general de conexión y, cuando ofrece esa información, el tipo Wi-Fi/Ethernet/móvil. No expone el nombre de tu red ni proporciona descubrimiento general de equipos cercanos. Estar en la misma red no sustituye el primer código.
+
+Para encontrar equipos de una LAN automáticamente hace falta un servicio local o una app instalada. Esta versión conserva GitHub Pages y cero base de datos; no escanea rangos IP, no inventa equipos ni supone que dos visitantes están en la misma red.
 
 ## Redes corporativas
 
@@ -42,7 +48,7 @@ npm run check
 npm run build
 ```
 
-`check` valida sintaxis y el protocolo: límites, códigos, bloques, archivos vacíos, corrupción e integridad. `build` genera `dist/`.
+`check` valida sintaxis y el protocolo: límites, códigos cortos con ceros iniciales, permisos de reconexión, nombres de dispositivo, bloques, archivos vacíos, corrupción e integridad. `build` genera `dist/`.
 
 GitHub Pages publica directamente **main / (root)**; `.nojekyll` desactiva Jekyll. `Verify main` corre los checks y el build en cada push. No abras ramas ni PR para cambios solicitados directamente en main.
 

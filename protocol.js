@@ -3,14 +3,23 @@ export const MAX_MEMORY = 100 * 1024 * 1024;
 export const MAX_TEXT = 512 * 1024;
 export const CHUNK_SIZE = 64 * 1024;
 export function newCode() { return Array.from(crypto.getRandomValues(new Uint8Array(12)), b => b.toString(16).padStart(2, '0')).join(''); }
-export function formatCode(code) { return code.match(/.{1,4}/g)?.join('-') || ''; }
+// Rejection sampling keeps all one million six-digit room codes equally likely.
+export function newRoomCode() {
+  const limit = Math.floor(2 ** 32 / 1000000) * 1000000;
+  let value;
+  do { value = crypto.getRandomValues(new Uint32Array(1))[0]; } while (value >= limit);
+  return String(value % 1000000).padStart(6, '0');
+}
+export function formatCode(code) { return /^\d{6}$/.test(code) ? `${code.slice(0, 3)} ${code.slice(3)}` : code.match(/.{1,4}/g)?.join('-') || ''; }
 export function parseCode(value) {
   let raw = String(value).trim();
   if (/^https?:\/\//i.test(raw)) { try { raw = new URL(raw).hash.slice(1); } catch { return null; } }
   raw = raw.replace(/[-\s]/g, '').toLowerCase();
-  return /^[a-f0-9]{24}$/.test(raw) ? raw : null;
+  return /^(?:\d{6}|[a-f0-9]{24})$/.test(raw) ? raw : null;
 }
+export function deviceName(value, fallback = 'Otro dispositivo') { return typeof value === 'string' ? value.replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, 40) || fallback : fallback; }
 export function validId(id) { return typeof id === 'string' && /^[a-f0-9-]{24,40}$/.test(id); }
+export function trustedReconnect(trusted, candidate) { return validId(trusted) && typeof candidate === 'string' && candidate === trusted; }
 export function safeName(name) { return String(name).replace(/[\x00-\x1f\x7f/\\]/g, '_').slice(0, 180) || 'archivo'; }
 export function sizeLabel(bytes) { return bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`; }
 export function validOffer(msg, used = 0) {
