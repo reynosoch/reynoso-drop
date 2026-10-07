@@ -2,9 +2,20 @@ export const MAX_FILE = 50 * 1024 * 1024;
 export const MAX_MEMORY = 100 * 1024 * 1024;
 export const MAX_TEXT = 512 * 1024;
 export const CHUNK_SIZE = 64 * 1024;
+const RESUME_HOST_KEY = 'reynoso-drop:resume-host-room';
 export function newCode() { return Array.from(crypto.getRandomValues(new Uint8Array(12)), b => b.toString(16).padStart(2, '0')).join(''); }
+function resumedRoomCode() {
+  try {
+    const value = globalThis.localStorage?.getItem(RESUME_HOST_KEY) || '';
+    if (!/^\d{4}$/.test(value)) return null;
+    globalThis.localStorage.removeItem(RESUME_HOST_KEY);
+    return value;
+  } catch { return null; }
+}
 // Rejection sampling keeps all ten thousand four-digit room codes equally likely.
 export function newRoomCode() {
+  const resumed = resumedRoomCode();
+  if (resumed) return resumed;
   const limit = Math.floor(2 ** 32 / 10000) * 10000;
   let value;
   do { value = crypto.getRandomValues(new Uint32Array(1))[0]; } while (value >= limit);
