@@ -1,5 +1,7 @@
-import { MAX_TEXT, MAX_FILE, MAX_MEMORY, CHUNK_SIZE, newCode, newRoomCode, formatCode, parseCode, deviceName, trustedReconnect, validId, safeName, sizeLabel, validOffer, digest, FileReceiver } from './protocol.js?v=1.2';
-import { fileKind, extendQueue, imageMime } from './files.js?v=1.2';
+import { MAX_TEXT, MAX_FILE, MAX_MEMORY, CHUNK_SIZE, newCode, newRoomCode, formatCode, parseCode, deviceName, trustedReconnect, validId, safeName, sizeLabel, validOffer, digest, FileReceiver } from './protocol.js?v=1.3';
+import { fileKind, extendQueue, imageMime } from './files.js?v=1.3';
+import { lineCount, needsTextFile, textFile } from './clipboard.js?v=1.3';
+import { drawRoomQR } from './qr.js?v=1.3';
 const $ = id => document.getElementById(id);
 let peer = null, connection = null, incoming = null, ready = false, room = '', host = false;
 let connectTimer, signalTimer, toastTimer, outgoingId = null, busy = false, usedMemory = 0;
@@ -75,6 +77,48 @@ function stageFiles(files) {
   $('file-input').value = $('photo-input').value = '';
   if (result.rejected.length) toast(`${result.rejected.length} ${result.rejected.length === 1 ? 'archivo omitido' : 'archivos omitidos'}: ${result.rejected[0].reason}.`);
 }
+function prepareTextFile(text) {
+  let file;
+  try { file = textFile(text); } catch (e) { toast(e.message); return null; }
+  stageFiles([file]);
+  if (!queuedFiles.includes(file)) return null;
+  toast(`${lineCount(text).toLocaleString('es-MX')} líneas preparadas como .txt. El contenido se conserva completo.`);
+  return file;
+}
+function pasteIntoEditor(text, atSelection = false) {
+  if (!text) return;
+  const area = $('text-input');
+  const start = atSelection ? area.selectionStart ?? area.value.length : area.value.length;
+  const end = atSelection ? area.selectionEnd ?? start : start;
+  const separator = !atSelection && area.value && !area.value.endsWith('\n') ? '\n' : '';
+  const next = area.value.slice(0, start) + separator + text + area.value.slice(end);
+  if (needsTextFile(next)) {
+    if (prepareTextFile(next)) { area.value = ''; countText(); }
+    return;
+  }
+  area.value = next;
+  area.focus(); area.setSelectionRange(start + separator.length + text.length, start + separator.length + text.length);
+  countText();
+}
+async function pasteClipboard() {
+  try {
+    if (!navigator.clipboard?.read) { pasteIntoEditor(await navigator.clipboard.readText(), true); return; }
+    const items = await navigator.clipboard.read();
+    let found = false;
+    for (const item of items) {
+      const imageType = item.types.find(type => type.startsWith('image/'));
+      if (imageType) {
+        const blob = await item.getType(imageType);
+        const extension = { 'image/png':'png', 'image/jpeg':'jpg', 'image/webp':'webp', 'image/gif':'gif' }[imageType] || 'image';
+        stageFiles([new File([blob], `portapapeles-${Date.now()}.${extension}`, {type:imageType})]); found = true;
+      }
+      if (item.types.includes('text/plain')) { pasteIntoEditor(await (await item.getType('text/plain')).text(), true); found = true; }
+    }
+    if (!found) toast('El navegador no expone este contenido. Agrega el archivo desde el selector.');
+  } catch {
+    $('text-input').focus(); toast('Pega con Ctrl+V o mantén presionado el campo en iPad.');
+  }
+}
 async function receivedPhoto(blob, card, name) {
   const mime = await imageMime(blob); if (!mime || !card.isConnected) return;
   const url = URL.createObjectURL(blob.slice(0,blob.size,mime)); urls.add(url); cardUrls.set(card,url);
@@ -109,7 +153,7 @@ function reset() {
   const previous = connection, next = incoming, previousPeer = peer;
   connection = incoming = peer = null;
   previous?.close(); next?.close(); previousPeer?.destroy();
-  $('device-request').hidden = true; $('room-details').hidden = true; $('setup').hidden = false;
+  $('device-request').hidden = true; $('room-details').hidden = true; $('qr-panel').hidden = true; $('setup').hidden = false;
   $('create-room').disabled = $('join-room').disabled = false;
   status('Sin conexión'); controls(); renderDevices();
   history.replaceState(null, '', location.pathname + location.search);
@@ -123,7 +167,7 @@ function disconnected(conn) {
     for (const key of [...pending.keys()]) ack(key, null, 'El otro dispositivo se desconectó');
     for (const id of [...receivers.keys()]) dropReceiver(id);
     status('Esperando dispositivo', 'waiting'); controls(); renderDevices();
-    $('connection-hint').textContent = 'El dispositivo se desconectó. Intentará volver automáticamente mientras ambas páginas sigan abiertas. También puedes unir otra pantalla con estos 6 números.';
+    $('connection-hint').textContent = 'El dispositivo se desconectó. Intentará volver automáticamente mientras ambas páginas sigan abiertas. También puedes unir otra pantalla con estos 4 números o el QR.';
     clearTimeout(roomExpiryTimer);
     roomExpiryTimer = setTimeout(() => { if (room && host && !ready) { reset(); toast('El código venció. Crea una sala nueva.'); } }, ROOM_TTL);
     return;
@@ -142,7 +186,11 @@ function connected() {
 }
 function showRoom() {
   $('setup').hidden = true; $('room-details').hidden = false; $('room-code').textContent = formatCode(room);
-  $('connection-hint').textContent = host ? 'Escribe estos 6 números en tu otra pantalla. Aquí solo tendrás que permitir su conexión. El código vence en 10 minutos si no conectas.' : 'Conectando automáticamente. El primer dispositivo debe permitir tu acceso.';
+  $('connection-hint').textContent = host ? 'Escribe estos 4 números o escanea el QR en tu otra pantalla. Aquí solo tendrás que permitir su conexión. El código vence en 10 minutos si no conectas.' : 'Conectando automáticamente. El primer dispositivo debe permitir tu acceso.';
+  if (host) {
+    try { const url = new URL(location.href); url.hash = room; drawRoomQR($('room-qr'), url.href); $('qr-panel').hidden = false; }
+    catch (e) { toast(e.message); }
+  }
   status(host ? 'Esperando dispositivo' : 'Conectando…', 'waiting');
   renderDevices();
 }
@@ -289,6 +337,10 @@ async function handle(msg) {
 async function sendText() {
   const text = $('text-input').value;
   if (!ready || busy || !text.trim()) return;
+  if (needsTextFile(text)) {
+    const file = prepareTextFile(text); if (!file) return;
+    $('text-input').value = ''; countText(); await sendFiles([file]); return;
+  }
   if (new TextEncoder().encode(text).byteLength > MAX_TEXT) { toast('El texto supera 512 KB. Envíalo como archivo.'); return; }
   if (usedMemory + new TextEncoder().encode(text).byteLength > MAX_MEMORY || $('inbox-items').children.length >= 30) { toast('Vacía la bandeja antes de enviar más.'); return; }
   busy = true; controls();
@@ -328,8 +380,12 @@ async function sendFiles(files) {
     error(e.message);
   } finally { outgoingId = null; busy = false; $('transfer-progress').hidden = true; $('file-input').value = ''; renderQueue(); controls(); }
 }
-function countText() { $('text-counter').textContent = `${$('text-input').value.length.toLocaleString('es-MX')} caracteres`; controls(); }
-function joinRoom() { const code = parseCode($('room-input').value); if (!code) { error('Escribe los 6 números de la sala. También puedes pegar su enlace.'); return; } start(false, code); }
+function countText() {
+  const text = $('text-input').value, asFile = needsTextFile(text);
+  $('text-counter').textContent = `${text.length.toLocaleString('es-MX')} caracteres · ${lineCount(text)} líneas${asFile ? ' · Se enviará como .txt' : ''}`;
+  $('send-text').textContent = asFile ? 'Enviar como .txt →' : 'Enviar texto →'; controls();
+}
+function joinRoom() { const code = parseCode($('room-input').value); if (!code) { error('Escribe los 4 números de la sala. También puedes pegar su enlace.'); return; } start(false, code); }
 function scheduleJoin() {
   clearTimeout(autoJoinTimer);
   if (!parseCode($('room-input').value) || room || peer) return;
@@ -348,7 +404,7 @@ $('leave-room').addEventListener('click', () => { if (connection?.open) send({ty
 $('text-input').addEventListener('input', countText);
 $('text-input').addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); sendText(); } if (e.key === 'Tab') { e.preventDefault(); const area = e.target; const start = area.selectionStart; area.setRangeText('  ', start, area.selectionEnd, 'end'); countText(); } });
 $('send-text').addEventListener('click', sendText);
-$('paste-text').addEventListener('click', async () => { try { $('text-input').value = (await navigator.clipboard.readText()).slice(0, MAX_TEXT); countText(); $('text-input').focus(); } catch { $('text-input').focus(); toast('Pega con Ctrl+V o mantén presionado el campo en iPad.'); } });
+$('paste-text').addEventListener('click', pasteClipboard);
 $('file-zone').addEventListener('click', () => $('file-input').click());
 $('choose-photos').addEventListener('click', () => $('photo-input').click());
 $('file-input').addEventListener('change', e => stageFiles(e.target.files));
@@ -357,7 +413,16 @@ $('send-files').addEventListener('click', () => sendFiles([...queuedFiles]));
 $('clear-files').addEventListener('click', () => { queuedFiles = []; renderQueue(); controls(); });
 for (const event of ['dragenter', 'dragover']) $('file-zone').addEventListener(event, e => { e.preventDefault(); if (!busy) $('file-zone').classList.add('drag-over'); });
 for (const event of ['dragleave', 'drop']) $('file-zone').addEventListener(event, e => { e.preventDefault(); $('file-zone').classList.remove('drag-over'); if (event === 'drop') stageFiles(e.dataTransfer.files); });
-window.addEventListener('paste', e => { if (e.clipboardData?.files.length) { e.preventDefault(); stageFiles(e.clipboardData.files); } });
+window.addEventListener('paste', e => {
+  const target = e.target, editor = $('text-input');
+  if (target !== editor && (target?.isContentEditable || /^(INPUT|TEXTAREA)$/.test(target?.tagName || ''))) return;
+  const files = Array.from(e.clipboardData?.files || []);
+  const text = e.clipboardData?.getData?.('text/plain') || '';
+  if (!files.length && !text) return;
+  e.preventDefault();
+  if (files.length) stageFiles(files);
+  if (text) pasteIntoEditor(text, target === editor);
+});
 window.addEventListener('dragover', e => e.preventDefault()); window.addEventListener('drop', e => e.preventDefault());
 $('cancel-transfer').addEventListener('click', () => { const id = outgoingId; if (!id) return; outgoingId = null; try { send({type:'failed',id,reason:'El remitente canceló el envío'}); } catch { /* disconnected */ } for (const key of [...pending.keys()]) if (key.includes(id)) ack(key, null, 'Envío cancelado'); });
 $('clear-inbox').addEventListener('click', () => {
@@ -369,4 +434,4 @@ window.addEventListener('pagehide', reset);
 const initial = parseCode(location.hash.slice(1)); if (initial) { $('room-input').value = formatCode(initial); history.replaceState(null, '', location.pathname + location.search); scheduleJoin(); }
 window.addEventListener('online', networkInfo); window.addEventListener('offline', networkInfo);
 navigator.connection?.addEventListener('change', networkInfo);
-controls(); renderDevices(); networkInfo(); renderQueue();
+countText(); renderDevices(); networkInfo(); renderQueue();

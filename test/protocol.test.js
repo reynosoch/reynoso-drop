@@ -6,11 +6,11 @@ test('códigos aleatorios y enlaces conservan la sala sin aceptar contenido arbi
   assert.equal(parseCode(formatCode(code).toUpperCase()),code); assert.equal(parseCode(`https://reynosoch.github.io/reynoso-drop/#${code}`),code);
   assert.equal(parseCode('<script>alert(1)</script>'),null);
 });
-test('salas de seis números conservan ceros, admiten escritura manual y enlaces', () => {
-  for(let i=0;i<100;i++) assert.match(newRoomCode(), /^\d{6}$/);
-  assert.equal(formatCode('001234'),'001 234'); assert.equal(parseCode('001 234'),'001234');
-  assert.equal(parseCode('001-234'),'001234'); assert.equal(parseCode('https://reynosoch.github.io/reynoso-drop/#001234'),'001234');
-  for(const bad of ['12345','1234567','12a456','00000000']) assert.equal(parseCode(bad),null);
+test('salas de cuatro números conservan ceros, admiten escritura manual y enlaces', () => {
+  for(let i=0;i<100;i++) assert.match(newRoomCode(), /^\d{4}$/);
+  assert.equal(formatCode('0012'),'0012'); assert.equal(parseCode('00 12'),'0012');
+  assert.equal(parseCode('00-12'),'0012'); assert.equal(parseCode('https://reynosoch.github.io/reynoso-drop/#0012'),'0012');
+  for(const bad of ['123','12345','123456','12a4','00000000']) assert.equal(parseCode(bad),null);
 });
 test('la reconexión solo confía en la identidad larga aprobada, no en el código corto', () => {
   const token=newCode(); assert.equal(trustedReconnect(token,token),true);

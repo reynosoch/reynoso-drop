@@ -5,12 +5,14 @@ import { runInNewContext } from 'node:vm';
 import { EventEmitter } from 'node:events';
 import * as protocol from '../protocol.js';
 import * as fileTools from '../files.js';
+import * as clipboardTools from '../clipboard.js';
+import * as qrTools from '../qr.js';
 
 // Exercise real application event handlers without a network or browser.
-function setup() {
+function setup({hash = '', clipboard = {}} = {}) {
   const elements = new Map(), timers = new Map(), peers = [], createdUrls = [], revokedUrls = [], windowEvents = new Map(); let timerId = 0;
-  function node() {
-    return {value:'',textContent:'',hidden:false,disabled:false,children:[],listeners:new Map(),replaceChildren(...children){this.children=children;},append(...children){this.children.push(...children);},addEventListener(event,fn){this.listeners.set(event,fn);},fire(event){return this.listeners.get(event)?.({target:this});},classList:{add(){},remove(){}}};
+  function node(tag = '') {
+    return {tagName:tag.toUpperCase(),focus(){},setSelectionRange(start,end){this.selectionStart=start;this.selectionEnd=end;},value:'',textContent:'',hidden:false,disabled:false,children:[],listeners:new Map(),replaceChildren(...children){this.children=children;},append(...children){this.children.push(...children);},addEventListener(event,fn){this.listeners.set(event,fn);},fire(event){return this.listeners.get(event)?.({target:this});},classList:{add(){},remove(){}}};
   }
   function element(id) {
     if (!elements.has(id)) elements.set(id,node());
@@ -29,9 +31,9 @@ function setup() {
   }
   const timersAPI = {setTimeout(fn, ms) { const id = ++timerId; timers.set(id,{fn,ms}); return id; },clearTimeout(id) { timers.delete(id); }};
   class TestURL extends URL { static createObjectURL(){const url=`blob:test-${createdUrls.length}`;createdUrls.push(url);return url;} static revokeObjectURL(url){revokedUrls.push(url);} }
-  const context = {...protocol, ...fileTools, ...timersAPI, crypto, TextEncoder, URL:TestURL, Blob,
-    document:{getElementById:element,createElement:node}, navigator:{userAgent:'Windows',platform:'Win32',maxTouchPoints:0,onLine:true},
-    window:{Peer,RTCPeerConnection(){},addEventListener(event,fn){windowEvents.set(event,fn);}}, history:{replaceState(){}}, location:{pathname:'/reynoso-drop/',search:'',hash:''}, confirm:()=>true};
+  const context = {...protocol, ...fileTools, ...clipboardTools, ...qrTools, ...timersAPI, crypto, TextEncoder, URL:TestURL, Blob, File,
+    document:{getElementById:element,createElement:node}, navigator:{userAgent:'Windows',platform:'Win32',maxTouchPoints:0,onLine:true,clipboard},
+    window:{Peer,RTCPeerConnection(){},addEventListener(event,fn){windowEvents.set(event,fn);}}, history:{replaceState(){}}, location:{href:`https://reynosoch.github.io/reynoso-drop/${hash}`,pathname:'/reynoso-drop/',search:'',hash}, confirm:()=>true};
   const source = readFileSync(new URL('../app.js',import.meta.url),'utf8').replace(/^import[^\n]+\n/gm,'');
   runInNewContext(source, context);
   function expire(ms) { for (const [id,timer] of [...timers]) if (timer.ms === ms && timers.has(id)) { timers.delete(id); timer.fn(); } }
@@ -71,16 +73,16 @@ test('envía varios documentos originales y retira de la cola solo los confirmad
   }
   assert.equal(element('file-selection').hidden,true); assert.equal(element('transfer-progress').hidden,true);
 });
-test('el sexto número conecta automáticamente; cinco números no abren una sala', () => {
+test('el cuarto número conecta automáticamente; tres números no abren una sala', () => {
   const {element,peers,expire} = setup();
-  element('room-input').value = '00123'; element('room-input').fire('input'); expire(300); assert.equal(peers.length,0);
-  element('room-input').value = '001234'; element('room-input').fire('input'); expire(300); assert.equal(peers.length,1);
-  peers[0].emit('open'); assert.equal(peers[0].target,'reynoso-drop-001234');
-  assert.equal(element('room-code').textContent,'001 234'); assert.equal(element('send-text').disabled,true);
+  element('room-input').value = '001'; element('room-input').fire('input'); expire(300); assert.equal(peers.length,0);
+  element('room-input').value = '0012'; element('room-input').fire('input'); expire(300); assert.equal(peers.length,1);
+  peers[0].emit('open'); assert.equal(peers[0].target,'reynoso-drop-0012');
+  assert.equal(element('room-code').textContent,'0012'); assert.equal(element('send-text').disabled,true);
 });
 test('equipos nuevos necesitan permiso; el autorizado vuelve solo y la lista conserva el estado real', () => {
   const {element,peers,Connection} = setup(); element('device-name').value='Laptop personal'; element('create-room').fire('click');
-  const host=peers[0]; host.emit('open'); assert.match(host.id,/^reynoso-drop-\d{6}$/);
+  const host=peers[0]; host.emit('open'); assert.match(host.id,/^reynoso-drop-\d{4}$/);
   const token=protocol.newCode(); const first=new Connection({device:'iPad',kind:'iPad',token});
   host.emit('connection',first); first.establish(); assert.equal(element('device-request').hidden,false); assert.equal(element('remote-device-name').textContent,'iPad');
   assert.equal(first.messages.length,0); element('accept-device').fire('click');
@@ -95,4 +97,42 @@ test('sala sin conectar vence a los diez minutos y las colisiones se reintentan'
   const {element,peers,expire}=setup(); element('create-room').fire('click'); const first=peers[0];
   first.emit('error',{type:'unavailable-id'}); assert.equal(peers.length,2); assert.equal(first.destroyed,true);
   peers[1].emit('open'); expire(10*60*1000); assert.equal(peers[1].destroyed,true); assert.equal(element('room-details').hidden,true); assert.equal(element('status').textContent,'Sin conexión');
+});
+test('Ctrl+V dirige texto al editor, respeta su selección y deja intacto el campo de sala', () => {
+  const {element,windowEvents}=setup(); const editor=element('text-input'), paste=windowEvents.get('paste');
+  const event=(text,target)=>({target,clipboardData:{files:[],getData:()=>text},preventDefault(){this.prevented=true;}});
+  const outside=event('texto inicial'); paste(outside); assert.equal(outside.prevented,true); assert.equal(editor.value,'texto inicial');
+  editor.selectionStart=0; editor.selectionEnd=5; paste(event('código',editor)); assert.equal(editor.value,'código inicial');
+  const room=element('room-input'); room.tagName='INPUT'; room.value='';
+  const normal=event('0012',room); paste(normal); assert.equal(normal.prevented,undefined); assert.equal(editor.value,'código inicial');
+});
+test('pegar 401 líneas prepara un txt completo antes de conectar y pegar 400 queda como texto', () => {
+  const {element,windowEvents}=setup(); const paste=windowEvents.get('paste');
+  const text=Array.from({length:400},(_,i)=>`const línea${i} = '😊';`).join('\n');
+  const event=value=>({clipboardData:{files:[],getData:()=>value},preventDefault(){}});
+  paste(event(text)); assert.equal(element('text-input').value,text); assert.equal(element('file-selection').hidden,true);
+  paste(event('línea 401')); assert.equal(element('text-input').value,'');
+  assert.match(element('file-queue').children[0].children[1].children[0].textContent,/\.txt$/);
+  assert.match(element('toast').textContent,/401 líneas/); assert.equal(element('send-files').disabled,true);
+});
+test('el enlace escaneado del QR conecta automáticamente conservando ceros', () => {
+  const {peers,expire,element}=setup({hash:'#0012'}); assert.equal(element('room-input').value,'0012');
+  expire(300); peers[0].emit('open'); assert.equal(peers[0].target,'reynoso-drop-0012');
+});
+test('el botón Pegar lee imágenes y texto y no solicita acceso al cargar', async () => {
+  let reads=0; const clipboard={async read(){reads++; return [{types:['image/png','text/plain'],async getType(type){return type==='text/plain'?new Blob(['código completo']):new Blob([new Uint8Array([137,80,78,71,13,10,26,10])],{type});}}];}};
+  const {element}=setup({clipboard}); assert.equal(reads,0); await element('paste-text').fire('click');
+  assert.equal(reads,1); assert.equal(element('text-input').value,'código completo'); assert.match(element('queue-summary').textContent,/1 archivo/);
+});
+test('enviar texto escrito con 401 líneas utiliza transferencia binaria y conserva los bytes', async () => {
+  const {element,peers,Connection}=setup(); element('create-room').fire('click'); const host=peers[0]; host.emit('open');
+  const conn=new Connection({token:protocol.newCode()}); host.emit('connection',conn); conn.establish(); element('accept-device').fire('click');
+  conn.send=msg=>{conn.messages.push(msg); const key=msg.type==='file-offer'?`offer:${msg.id}`:msg.type==='file-chunk'?`chunk:${msg.id}:${msg.index}`:msg.type==='file-end'?`end:${msg.id}`:null; if(key) conn.emit('data',{type:'ack',key});};
+  const text=Array.from({length:401},(_,i)=>`línea ${i}: ñ 😊`).join('\r\n');
+  element('text-input').value=text; element('text-input').fire('input'); assert.match(element('send-text').textContent,/\.txt/);
+  await element('send-text').fire('click');
+  assert.equal(conn.messages.some(msg=>msg.type==='text'),false);
+  const offer=conn.messages.find(msg=>msg.type==='file-offer'); assert.match(offer.name,/\.txt$/);
+  const receiver=new protocol.FileReceiver(offer); for(const chunk of conn.messages.filter(msg=>msg.type==='file-chunk')) receiver.append(chunk);
+  assert.equal(await (await receiver.finish()).text(),text); assert.equal(element('file-selection').hidden,true);
 });
