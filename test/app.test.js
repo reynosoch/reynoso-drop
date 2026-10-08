@@ -8,6 +8,7 @@ import * as fileTools from '../files.js';
 import * as clipboardTools from '../clipboard.js';
 import * as qrTools from '../qr.js';
 import * as deviceTools from '../devices.js';
+import * as scanTools from '../qrscan.js';
 import {peerRoundTrip} from './helpers/peer-codec.js';
 
 // Exercise real application event handlers without a network or browser.
@@ -33,7 +34,7 @@ function setup({hash = '', clipboard = {}, autoReceive = true, userAgent = 'Wind
   }
   const timersAPI = {setTimeout(fn, ms) { const id = ++timerId; timers.set(id,{fn,ms}); return id; },clearTimeout(id) { timers.delete(id); }};
   class TestURL extends URL { static createObjectURL(){const url=`blob:test-${createdUrls.length}`;createdUrls.push(url);return url;} static revokeObjectURL(url){revokedUrls.push(url);} }
-  const context = {...protocol, ...fileTools, ...clipboardTools, ...qrTools, ...deviceTools, ...timersAPI, crypto, TextEncoder, URL:TestURL, Blob, File,
+  const context = {...protocol, ...fileTools, ...clipboardTools, ...qrTools, ...deviceTools, ...scanTools, ...timersAPI, crypto, TextEncoder, URL:TestURL, Blob, File,
     document:{getElementById:element,createElement:node}, navigator:{userAgent,platform,maxTouchPoints,onLine:true,clipboard},
     window:{Peer,RTCPeerConnection(){},addEventListener(event,fn){windowEvents.set(event,fn);}}, history:{replaceState(){}}, location:{href:`https://reynosoch.github.io/reynoso-drop/${hash}`,pathname:'/reynoso-drop/',search:'',hash}, confirm:()=>true};
   element('auto-receive').checked=autoReceive;
@@ -47,7 +48,7 @@ test('permite cargar documentos antes de conectar y limpiar la selección sin en
   assert.equal(element('file-zone').disabled,false); assert.equal(element('choose-photos').disabled,false);
   element('file-input').files=[new File(['PK00'],'reporte.xlsx'),new File(['%PDF'],'manual.pdf')]; element('file-input').fire('change');
   assert.match(element('queue-summary').textContent,/2 archivos/); assert.equal(element('file-queue').children.length,2);
-  assert.equal(element('send-files').disabled,true); assert.equal(peers.length,0);
+  assert.equal(element('send-text').disabled,true); assert.equal(peers.length,0);
   element('clear-files').fire('click'); assert.equal(element('file-selection').hidden,true); assert.equal(element('file-queue').children.length,0);
 });
 test('pegar una captura la agrega como archivo y limpiar revoca las miniaturas temporales', async () => {
@@ -67,8 +68,8 @@ test('envía varios documentos originales y retira de la cola solo los confirmad
     if(key) conn.emit('data',{type:'ack',key});
   };
   const excel=new File([new Uint8Array([80,75,3,4,0,255])],'reporte.xlsx'); const pdf=new File(['%PDF sample'],'manual.pdf');
-  element('file-input').files=[excel,pdf]; element('file-input').fire('change'); assert.equal(element('send-files').disabled,false);
-  await element('send-files').fire('click');
+  element('file-input').files=[excel,pdf]; element('file-input').fire('change'); assert.equal(element('send-text').disabled,false);
+  await element('send-text').fire('click');
   const offers=conn.messages.filter(msg=>msg.type==='file-offer'); assert.deepEqual(offers.map(msg=>msg.name),['reporte.xlsx','manual.pdf']);
   for(const [i,file] of [excel,pdf].entries()) {
     const parts=conn.messages.filter(msg=>msg.type==='file-chunk'&&msg.id===offers[i].id).map(msg=>msg.bytes);
@@ -115,7 +116,7 @@ test('pegar 401 líneas prepara un txt completo antes de conectar y pegar 400 qu
   paste(event(text)); assert.equal(element('text-input').value,text); assert.equal(element('file-selection').hidden,true);
   paste(event('línea 401')); assert.equal(element('text-input').value,'');
   assert.match(element('file-queue').children[0].children[1].children[0].textContent,/\.txt$/);
-  assert.match(element('toast').textContent,/401 líneas/); assert.equal(element('send-files').disabled,true);
+  assert.match(element('toast').textContent,/401 líneas/); assert.equal(element('send-text').disabled,true);
 });
 test('el enlace escaneado del QR conecta automáticamente conservando ceros', () => {
   const {peers,expire,element}=setup({hash:'#0012'}); assert.equal(element('room-input').value,'0012');
@@ -189,7 +190,7 @@ test('captura y Excel pasan por el codec real de PeerJS y llegan automáticament
   const photoBytes=new Uint8Array(protocol.CHUNK_SIZE*2+23);for(let i=0;i<photoBytes.length;i++)photoBytes[i]=i%251;photoBytes.set([137,80,78,71,13,10,26,10]);
   const files=[new File([photoBytes],'captura.png'),new File([new Uint8Array([80,75,3,4,0,255])],'reporte.xlsx')];
   sender.element('file-input').files=files;sender.element('file-input').fire('change');
-  await sender.element('send-files').fire('click');
+  await sender.element('send-text').fire('click');
   assert.equal(sender.element('file-selection').hidden,true);assert.equal(receiver.element('inbox-items').children.length,2);
   for(const card of receiver.element('inbox-items').children){
     assert.equal(card.children[0].children[0].textContent,'ARCHIVO · RECIBIDO');
@@ -201,9 +202,29 @@ test('captura y Excel pasan por el codec real de PeerJS y llegan automáticament
 test('modo manual conserva aceptar/rechazar y activar automático libera la espera', async () => {
   const {sender,receiver,connected,offered}=linkedSessions({autoReceive:false});await connected;
   sender.element('file-input').files=[new File(['contenido completo'],'manual.txt')];sender.element('file-input').fire('change');
-  const sending=sender.element('send-files').fire('click');await offered;
+  const sending=sender.element('send-text').fire('click');await offered;
   const card=receiver.element('inbox-items').children[0];assert.equal(card.children[3].children[0].textContent,'Recibir archivo');
   assert.equal(sender.element('file-selection').hidden,false);
   receiver.element('auto-receive').checked=true;receiver.element('auto-receive').fire('change');await sending;
   assert.equal(sender.element('file-selection').hidden,true);assert.match(card.children[2].textContent,/Integridad verificada/);
+});
+test('al conectar la sección de conexión se minimiza y se reabre al cerrar la sala', () => {
+  const {element,peers,Connection}=setup(); element('create-room').fire('click'); const host=peers[0]; host.emit('open');
+  assert.equal(element('session-panel').open,true);
+  const conn=new Connection({device:'iPad',kind:'iPad'}); host.emit('connection',conn); conn.establish();
+  assert.equal(element('session-panel').open,false); assert.match(element('session-summary').textContent,/iPad conectado/);
+  element('leave-room').fire('click'); assert.equal(element('session-panel').open,true);
+});
+test('lo recibido muestra el dispositivo que lo envió y la hora, y el envío unificado manda texto y archivos', async () => {
+  const {element,peers,Connection}=setup(); element('create-room').fire('click'); const host=peers[0]; host.emit('open');
+  const conn=new Connection({device:'iPad de Reynoso',kind:'iPad'}); host.emit('connection',conn); conn.establish();
+  conn.send=msg=>{conn.messages.push(msg); const key=msg.type==='file-offer'?`offer:${msg.id}`:msg.type==='file-chunk'?`chunk:${msg.id}:${msg.index}`:msg.type==='file-end'?`end:${msg.id}`:msg.type==='text'?`text:${msg.id}`:null; if(key) conn.emit('data',{type:'ack',key});};
+  conn.emit('data',{type:'text',id:protocol.newCode(),text:'hola',sentAt:Date.now()});
+  const meta=element('inbox-items').children[0].children[0];
+  assert.equal(meta.children[0].textContent,'TEXTO · RECIBIDO'); assert.match(meta.children[1].textContent,/\d{2}:\d{2}:\d{2}/); assert.match(meta.children[2].textContent,/^De: iPad de Reynoso/);
+  element('text-input').value='nota'; element('file-input').files=[new File(['abc'],'a.txt')]; element('file-input').fire('change');
+  element('text-input').fire('input'); assert.match(element('send-text').textContent,/texto \+ 1 archivo/);
+  await element('send-text').fire('click');
+  assert.deepEqual(conn.messages.filter(m=>m.type==='text'||m.type==='file-offer').map(m=>m.type),['text','file-offer']);
+  assert.equal(element('text-input').value,''); assert.equal(element('file-selection').hidden,true);
 });

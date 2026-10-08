@@ -2,15 +2,15 @@
 
 [Abrir la app](https://reynosoch.github.io/reynoso-drop/)
 
-Pasa texto, código, capturas y archivos entre dos dispositivos mediante WebRTC. Funciona como sitio estático en **GitHub Pages**, sin Supabase, sin cuentas y sin base de datos remota. La versión 1.6 añade modo **PWA para iPad**, envío rápido con Enter y recuperación local de sesión.
+Pasa texto, código, capturas y archivos entre dos dispositivos mediante WebRTC. Funciona como sitio estático en **GitHub Pages**, sin Supabase, sin cuentas y sin base de datos remota. La versión 1.7 hace la conexión desplegable (se minimiza sola al conectar), añade un **escáner de QR con la cámara**, unifica el envío de texto/fotos/archivos en una sola sección y muestra qué dispositivo envió cada elemento y a qué hora.
 
 ## Uso rápido
 
 1. Abre la app en ambos dispositivos.
 2. En uno pulsa **Crear sala**. Se genera un código de 4 números y un QR.
-3. En el otro escribe los 4 números o escanea el QR. La conexión se intenta automáticamente, sin autorización adicional del anfitrión.
+3. En el otro escribe los 4 números o pulsa **Abrir escáner** para leer el QR con la cámara. La conexión se intenta automáticamente, sin autorización adicional del anfitrión.
 4. Escribe o pega texto. **Enter envía inmediatamente**. **Shift+Enter** inserta una nueva línea. El botón Enviar sigue disponible.
-5. Para archivos usa **Agregar fotos y archivos**, **Elegir fotos**, arrastrar/soltar o pegar cuando el navegador exponga archivos del portapapeles.
+5. Para archivos usa **Archivos**, **Fotos**, arrastra y suelta sobre el cuadro de texto o pega. Texto y archivos salen juntos con un único botón **Enviar**.
 6. Los textos muy grandes se preparan como `.txt`; los archivos se transfieren por bloques y se validan con SHA-256.
 
 ## iPad / PWA
@@ -48,7 +48,7 @@ La bandeja de archivos recibidos y los blobs **siguen siendo temporales en memor
 
 ## Desarrollo
 
-HTML, CSS y JavaScript nativos. PeerJS 1.5.5 y qrcode-generator 1.4.4 están fijados dentro de `vendor/`.
+HTML, CSS y JavaScript nativos. PeerJS 1.5.5, qrcode-generator 1.4.4 y jsQR 1.4.0 (Apache-2.0, lector de QR de respaldo) están fijados dentro de `vendor/`.
 
 ```sh
 npm run check

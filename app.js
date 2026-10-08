@@ -1,12 +1,13 @@
-import { MAX_TEXT, MAX_FILE, MAX_MEMORY, CHUNK_SIZE, newCode, newRoomCode, formatCode, parseCode, deviceName, validId, safeName, sizeLabel, validOffer, digest, FileReceiver } from './protocol.js?v=1.5';
-import { fileKind, extendQueue, imageMime } from './files.js?v=1.5';
-import { lineCount, needsTextFile, textFile } from './clipboard.js?v=1.5';
-import { drawRoomQR } from './qr.js?v=1.5';
-import { detectDevice, deviceType, deviceIcon } from './devices.js?v=1.5';
+import { MAX_TEXT, MAX_FILE, MAX_MEMORY, CHUNK_SIZE, newCode, newRoomCode, formatCode, parseCode, deviceName, validId, safeName, sizeLabel, validOffer, digest, FileReceiver } from './protocol.js?v=1.7';
+import { fileKind, extendQueue, imageMime } from './files.js?v=1.7';
+import { lineCount, needsTextFile, textFile } from './clipboard.js?v=1.7';
+import { drawRoomQR } from './qr.js?v=1.7';
+import { detectDevice, deviceType, deviceIcon } from './devices.js?v=1.7';
+import { startQRScanner } from './qrscan.js?v=1.7';
 const $ = id => document.getElementById(id);
 let peer = null, connection = null, incoming = null, ready = false, room = '', host = false;
 let connectTimer, signalTimer, toastTimer, outgoingId = null, busy = false, usedMemory = 0;
-let autoJoinTimer, roomExpiryTimer, reconnectTimer, remoteName = '', remoteKind = '', roomName = '';
+let autoJoinTimer, roomExpiryTimer, reconnectTimer, remoteName = '', remoteKind = '', roomName = '', stopScan = null;
 const ROOM_TTL = 10 * 60 * 1000;
 const pending = new Map(), receivers = new Map(), urls = new Set();
 let queuedFiles = [], queueGeneration = 0;
@@ -31,6 +32,7 @@ function renderDevices() {
   }
   $('device-count').textContent = ready ? '2 dispositivos' : hasRemote ? '2 · conectando' : '1 dispositivo';
   $('device-name').disabled = Boolean(room);
+  $('session-summary').textContent = ready ? `Sala ${formatCode(room)} · ${remoteName || 'Dispositivo'} conectado` : room ? `Sala ${formatCode(room)}` : '';
 }
 
 function networkInfo() {
@@ -41,12 +43,21 @@ function networkInfo() {
 function toast(message) { $('toast').textContent = message; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').hidden = true; }, 4500); }
 function error(message) { $('session-error').textContent = message; $('session-error').hidden = false; }
 function status(message, kind = '') { $('status').textContent = message; $('status').className = `badge ${kind}`; }
+function sendLabel() {
+  const value = $('text-input').value, hasText = Boolean(value.trim()), count = queuedFiles.length;
+  const files = `${count} ${count === 1 ? 'archivo' : 'archivos'}`;
+  if (hasText && count) return `Enviar texto + ${files} →`;
+  if (count) return `Enviar ${files} →`;
+  if (hasText) return needsTextFile(value) ? 'Enviar como .txt →' : 'Enviar texto →';
+  return 'Enviar →';
+}
 function controls() {
-  $('send-text').disabled = !ready || !$('text-input').value.trim() || busy;
+  const hasText = Boolean($('text-input').value.trim());
+  $('send-text').disabled = !ready || busy || (!hasText && !queuedFiles.length) || (!hasText && receivers.size > 0);
+  $('send-text').textContent = sendLabel();
   $('file-zone').disabled = $('choose-photos').disabled = $('file-input').disabled = $('photo-input').disabled = busy;
-  $('send-files').disabled = !ready || busy || !queuedFiles.length || receivers.size > 0;
   $('clear-files').disabled = busy || !queuedFiles.length;
-  $('queue-hint').textContent = !queuedFiles.length ? 'Puedes seleccionar archivos antes de conectar.' : !ready ? 'Conecta la otra pantalla para enviar esta selección.' : receivers.size ? 'Termina la recepción actual para enviar.' : 'Listo para enviar a tu otra pantalla.';
+  $('queue-hint').textContent = !queuedFiles.length && !hasText ? 'Puedes preparar tu envío antes de conectar. Todo sale con un solo botón.' : !ready ? 'Conecta la otra pantalla para enviar tu selección.' : receivers.size ? 'Termina la recepción actual para enviar archivos.' : 'Listo: texto y archivos salen juntos con Enviar.';
 }
 function releaseCardPreview(card) {
   const url = cardUrls.get(card); if (!url) return;
@@ -160,6 +171,7 @@ function reset() {
   const previous = connection, next = incoming, previousPeer = peer;
   connection = incoming = peer = null;
   previous?.close(); next?.close(); previousPeer?.destroy();
+  closeScanner(); $('session-panel').open = true;
   $('room-details').hidden = true; $('qr-panel').hidden = true; $('setup').hidden = false;
   $('create-room').disabled = $('join-room').disabled = false;
   status('Sin conexión'); controls(); renderDevices();
@@ -189,7 +201,7 @@ function disconnected(conn) {
 function connected() {
   clearTimeout(connectTimer); clearTimeout(roomExpiryTimer); ready = true; status('Conectado', 'connected'); renderDevices();
   $('connection-hint').textContent = 'Las dos pantallas están conectadas. Puedes enviar en ambas direcciones.';
-  $('session-error').hidden = true; controls(); toast('Tu otra pantalla está conectada');
+  $('session-error').hidden = true; closeScanner(); $('session-panel').open = false; controls(); toast('Tu otra pantalla está conectada');
 }
 function showRoom() {
   $('setup').hidden = true; $('room-details').hidden = false; $('room-code').textContent = formatCode(room);
@@ -201,7 +213,7 @@ function showRoom() {
   status(host ? 'Esperando dispositivo' : 'Conectando…', 'waiting');
   renderDevices();
 }
-function roomURL() { const url = new URL(location.href); url.searchParams.set('v', '1.5'); url.hash = room; return url; }
+function roomURL() { const url = new URL(location.href); url.searchParams.set('v', '1.7'); url.hash = room; return url; }
 function watchConnection(conn) {
   const rtc = conn.peerConnection; if (!rtc?.addEventListener) return;
   const update = () => {
@@ -289,13 +301,17 @@ function start(isHost, code, collisionAttempts = 0) {
   instance.on('disconnected', () => { if (peer === instance && !ready) { reset(); error('Se perdió la conexión con el servicio de salas. Vuelve a crear la sala.'); } });
 }
 function updateInbox() { const count = $('inbox-items').children.length; $('inbox-empty').hidden = count > 0; $('clear-inbox').disabled = count === 0; }
-function makeCard(label) {
+function stamp(value) { return Number.isFinite(value) && Math.abs(Date.now() - value) < 86400000 ? new Date(value) : new Date(); }
+function fromLabel(sent) { const who = remoteName || 'Dispositivo'; return `${sent ? 'Para' : 'De'}: ${who}${remoteKind && remoteKind !== who ? ` · ${remoteKind}` : ''}`; }
+function makeCard(label, from = '', at) {
   if ($('inbox-items').children.length >= 30) throw new Error('Bandeja llena. Vacíala antes de recibir más.');
   const card = document.createElement('article'); card.className = 'item';
   const meta = document.createElement('div'); meta.className = 'item-meta';
   const kind = document.createElement('span'); kind.textContent = label;
-  const time = document.createElement('span'); time.textContent = new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
-  meta.append(kind, time); card.append(meta); $('inbox-items').prepend(card); updateInbox(); return card;
+  const time = document.createElement('span'); time.textContent = stamp(at).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  meta.append(kind, time);
+  if (from) { const origin = document.createElement('span'); origin.className = 'item-from'; origin.textContent = from; meta.append(origin); }
+  card.append(meta); $('inbox-items').prepend(card); updateInbox(); return card;
 }
 function addButton(parent, text, action, kind = 'secondary') { const button = document.createElement('button'); button.className = `button ${kind}`; button.textContent = text; button.addEventListener('click', action); parent.append(button); return button; }
 async function copy(text) {
@@ -306,10 +322,10 @@ function download(blob, name) {
   const url = URL.createObjectURL(blob); urls.add(url); const a = document.createElement('a'); a.href = url; a.download = safeName(name); a.click();
   setTimeout(() => { URL.revokeObjectURL(url); urls.delete(url); }, 60000);
 }
-function textCard(text, sent = false) {
+function textCard(text, sent = false, at) {
   const bytes = new TextEncoder().encode(text).byteLength;
   if (usedMemory + bytes > MAX_MEMORY) throw new Error('Bandeja llena. Vacíala para continuar.');
-  const card = makeCard(sent ? 'TEXTO · ENVIADO' : 'TEXTO · RECIBIDO'); usedMemory += bytes;
+  const card = makeCard(sent ? 'TEXTO · ENVIADO' : 'TEXTO · RECIBIDO', fromLabel(sent), at); usedMemory += bytes;
   const pre = document.createElement('pre'); pre.textContent = text; card.append(pre);
   const actions = document.createElement('div'); actions.className = 'item-actions'; card.append(actions);
   addButton(actions, 'Copiar', () => copy(text)); addButton(actions, 'Descargar .txt', () => download(new Blob([text], {type:'text/plain;charset=utf-8'}), 'texto.txt'));
@@ -331,7 +347,7 @@ function receiveFile(entry) {
   receiverTimeout(entry); send({type:'ack',key:`offer:${entry.offer.id}`});
 }
 function fileCard(offer) {
-  const card = makeCard('ARCHIVO · SOLICITUD');
+  const card = makeCard('ARCHIVO · SOLICITUD', fromLabel(false), offer.sentAt);
   const name = document.createElement('strong'); name.className = 'item-name'; name.textContent = safeName(offer.name);
   const state = document.createElement('div'); state.className = 'item-size'; state.textContent = `${fileKind(offer.name)} · ${sizeLabel(offer.size)} · Esperando tu permiso`;
   const actions = document.createElement('div'); actions.className = 'item-actions'; card.append(name, state, actions);
@@ -354,7 +370,7 @@ async function handle(msg) {
   }
   if (msg.type === 'text') {
     if (!validId(msg.id) || typeof msg.text !== 'string' || !msg.text.trim() || new TextEncoder().encode(msg.text).byteLength > MAX_TEXT) throw new Error('El texto supera el límite de 512 KB o no es válido');
-    textCard(msg.text); send({type:'ack',key:`text:${msg.id}`}); toast('Texto recibido'); return;
+    textCard(msg.text, false, msg.sentAt); send({type:'ack',key:`text:${msg.id}`}); toast('Texto recibido'); return;
   }
   if (msg.type === 'file-offer') {
     if (!validOffer(msg, usedMemory) || receivers.size || busy) throw new Error('Archivo no admitido, bandeja llena o hay otro envío en curso');
@@ -387,7 +403,7 @@ async function sendText() {
   if (new TextEncoder().encode(text).byteLength > MAX_TEXT) { toast('El texto supera 512 KB. Envíalo como archivo.'); return; }
   if (usedMemory + new TextEncoder().encode(text).byteLength > MAX_MEMORY || $('inbox-items').children.length >= 30) { toast('Vacía la bandeja antes de enviar más.'); return; }
   busy = true; controls();
-  try { const id = newCode(); await request({type:'text',id,text}, `text:${id}`); textCard(text, true); if ($('text-input').value === text) { $('text-input').value = ''; countText(); } toast('Texto entregado'); }
+  try { const id = newCode(); await request({type:'text',id,text,sentAt:Date.now()}, `text:${id}`); textCard(text, true); if ($('text-input').value === text) { $('text-input').value = ''; countText(); } toast('Texto entregado'); }
   catch (e) { error(e.message); }
   finally { busy = false; controls(); }
 }
@@ -403,7 +419,7 @@ async function sendFiles(files) {
       const hash = await digest(await file.arrayBuffer());
       if (outgoingId !== id || !ready) throw new Error('Envío cancelado');
       $('progress-label').textContent = 'Preparando la recepción en tu otra pantalla…';
-      await request({type:'file-offer', id, name:safeName(file.name), size:file.size, hash}, `offer:${id}`, 95000);
+      await request({type:'file-offer', id, name:safeName(file.name), size:file.size, hash, sentAt:Date.now()}, `offer:${id}`, 95000);
       let index = 0;
       for (let offset = 0; offset < file.size; offset += CHUNK_SIZE) {
         const bytes = await file.slice(offset, offset + CHUNK_SIZE).arrayBuffer();
@@ -423,10 +439,31 @@ async function sendFiles(files) {
     error(e.message);
   } finally { outgoingId = null; busy = false; $('transfer-progress').hidden = true; $('file-input').value = ''; renderQueue(); controls(); }
 }
+async function sendAll() {
+  if (!ready || busy) return;
+  const text = $('text-input').value, hasText = Boolean(text.trim());
+  if (!hasText && !queuedFiles.length) return;
+  if (hasText) { await sendText(); if (!ready || busy || $('text-input').value === text) return; }
+  if (queuedFiles.length) await sendFiles([...queuedFiles]);
+}
+function closeScanner() { stopScan?.(); stopScan = null; $('scan-panel').hidden = true; }
+async function openScanner() {
+  if (room || peer) { toast('Ya hay una sala abierta. Ciérrala para escanear otra.'); return; }
+  $('session-error').hidden = true; $('scan-panel').hidden = false;
+  try {
+    const stop = await startQRScanner({ video: $('scan-video'), canvas: $('scan-canvas'), onCode: value => {
+      const code = parseCode(value);
+      if (!code) { toast('Ese QR no es de una sala de Reynoso Drop.'); return false; }
+      closeScanner(); $('room-input').value = formatCode(code); joinRoom(); return true;
+    } });
+    if ($('scan-panel').hidden) { stop(); return; }
+    stopScan = stop;
+  } catch (e) { closeScanner(); error(e.message); }
+}
 function countText() {
   const text = $('text-input').value, asFile = needsTextFile(text);
   $('text-counter').textContent = `${text.length.toLocaleString('es-MX')} caracteres · ${linesLabel(text)}${asFile ? ' · Se enviará como .txt' : ''}`;
-  $('send-text').textContent = asFile ? 'Enviar como .txt →' : 'Enviar texto →'; controls();
+  controls();
 }
 function joinRoom() { const code = parseCode($('room-input').value); if (!code) { error('Escribe los 4 números de la sala. También puedes pegar su enlace.'); return; } start(false, code); }
 function scheduleJoin() {
@@ -443,18 +480,19 @@ $('copy-code').addEventListener('click', () => copy(formatCode(room)));
 $('copy-link').addEventListener('click', () => copy(roomURL().href));
 $('leave-room').addEventListener('click', () => { if (connection?.open) send({type:'room-closed'}); reset(); toast('Sala cerrada'); });
 $('text-input').addEventListener('input', countText);
-$('text-input').addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); sendText(); } if (e.key === 'Tab') { e.preventDefault(); const area = e.target; const start = area.selectionStart; area.setRangeText('  ', start, area.selectionEnd, 'end'); countText(); } });
-$('send-text').addEventListener('click', sendText);
+$('text-input').addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); sendAll(); } if (e.key === 'Tab') { e.preventDefault(); const area = e.target; const start = area.selectionStart; area.setRangeText('  ', start, area.selectionEnd, 'end'); countText(); } });
+$('send-text').addEventListener('click', sendAll);
+$('scan-qr').addEventListener('click', openScanner);
+$('scan-close').addEventListener('click', closeScanner);
 $('paste-text').addEventListener('click', pasteClipboard);
 $('file-zone').addEventListener('click', () => $('file-input').click());
 $('choose-photos').addEventListener('click', () => $('photo-input').click());
 $('file-input').addEventListener('change', e => stageFiles(e.target.files));
 $('photo-input').addEventListener('change', e => stageFiles(e.target.files));
 $('auto-receive').addEventListener('change', () => { if ($('auto-receive').checked) for (const entry of receivers.values()) receiveFile(entry); });
-$('send-files').addEventListener('click', () => sendFiles([...queuedFiles]));
 $('clear-files').addEventListener('click', () => { queuedFiles = []; renderQueue(); controls(); });
-for (const event of ['dragenter', 'dragover']) $('file-zone').addEventListener(event, e => { e.preventDefault(); if (!busy) $('file-zone').classList.add('drag-over'); });
-for (const event of ['dragleave', 'drop']) $('file-zone').addEventListener(event, e => { e.preventDefault(); $('file-zone').classList.remove('drag-over'); if (event === 'drop') stageFiles(e.dataTransfer.files); });
+for (const event of ['dragenter', 'dragover']) $('compose-drop').addEventListener(event, e => { e.preventDefault(); if (!busy) $('compose-drop').classList.add('drag-over'); });
+for (const event of ['dragleave', 'drop']) $('compose-drop').addEventListener(event, e => { e.preventDefault(); $('compose-drop').classList.remove('drag-over'); if (event === 'drop') stageFiles(e.dataTransfer.files); });
 window.addEventListener('paste', e => {
   const target = e.target, editor = $('text-input');
   if (target !== editor && (target?.isContentEditable || /^(INPUT|TEXTAREA)$/.test(target?.tagName || ''))) return;

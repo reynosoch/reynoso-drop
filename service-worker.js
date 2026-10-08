@@ -1,8 +1,8 @@
-const CACHE = 'reynoso-drop-v1.6';
+const CACHE = 'reynoso-drop-v1.7';
 const SHELL = [
   './', './index.html', './styles.css', './theme.css', './favicon.svg', './manifest.webmanifest',
-  './app.js', './session.js', './protocol.js', './files.js', './clipboard.js', './qr.js', './devices.js',
-  './vendor/peerjs.min.js', './vendor/qrcode.js', './icons/icon-180.png', './icons/icon-512.png'
+  './app.js', './session.js', './protocol.js', './files.js', './clipboard.js', './qr.js', './devices.js', './qrscan.js',
+  './vendor/peerjs.min.js', './vendor/qrcode.js', './vendor/jsqr.js', './icons/icon-180.png', './icons/icon-512.png'
 ];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting()));
