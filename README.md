@@ -1,6 +1,8 @@
 # Reynoso Drop
 
-[Abrir la app](https://reynosoch.github.io/reynoso-drop/)
+[Abrir Drop en su nueva ubicación](https://reynosoch.github.io/drop/) · [Centro de herramientas](https://reynosoch.github.io/)
+
+> **Proyecto trasladado:** el código vigente y las próximas mejoras viven en [`reynosoch/reynosoch.github.io/drop/`](https://github.com/reynosoch/reynosoch.github.io/tree/main/drop). Este repositorio conserva la versión 1.7 como respaldo. Para trabajar en Drop, usa el repositorio central y su README.
 
 Pasa texto, código, capturas y archivos entre dos dispositivos mediante WebRTC. Funciona como sitio estático en **GitHub Pages**, sin Supabase, sin cuentas y sin base de datos remota. La versión 1.7 hace la conexión desplegable (se minimiza sola al conectar), añade un **escáner de QR con la cámara**, unifica el envío de texto/fotos/archivos en una sola sección y muestra qué dispositivo envió cada elemento y a qué hora.
 
@@ -63,6 +65,6 @@ GitHub Pages publica directamente **main / (root)**. `.nojekyll` permanece en el
 
 ## AGENT_CONTEXT
 
-Proyecto independiente del reconciliador Visteon. Cambios directos en `main`, sin PR cuando el usuario lo pida así. Mantener transferencia dispositivo-a-dispositivo, sin Supabase ni almacenamiento remoto de contenido. No eliminar carga de archivos, QR, recepción automática/manual, SHA-256, límites de memoria ni compatibilidad con iPad.
+Este repositorio es el respaldo histórico v1.7. El proyecto activo está en `reynosoch/reynosoch.github.io`, carpeta `drop/`; realizar allí los cambios y leer su README de raíz y de Drop. Proyecto independiente del reconciliador Visteon. Cambios directos en `main`, sin PR cuando el usuario lo pida así. Mantener transferencia dispositivo-a-dispositivo, sin Supabase ni almacenamiento remoto de contenido. No eliminar carga de archivos, QR, recepción automática/manual, SHA-256, límites de memoria ni compatibilidad con iPad.
 
 v1.6 cambia deliberadamente una decisión anterior: la **sesión sí se conserva localmente** para sobrevivir F5/cortes, mientras que la bandeja y los archivos recibidos continúan solo en memoria. `localStorage` se usa para metadatos pequeños y preferencias; no se usa una base de datos remota. Enter envía texto y Shift+Enter crea salto de línea. La PWA es instalable en iPad y cachea únicamente recursos estáticos de la app.
